@@ -1,0 +1,15 @@
+[package]
+name = "agent2d-compression"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent2d-core = { path = "../agent2d-core" }
+image.workspace = true
+sha2 = "0.10"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

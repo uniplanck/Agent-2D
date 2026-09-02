@@ -1,0 +1,25 @@
+[package]
+name = "agent2d-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "agent2d_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+agent2d-core = { path = "../../../crates/agent2d-core" }
+agent2d-compression = { path = "../../../crates/agent2d-compression" }
+agent2d-sr = { path = "../../../crates/agent2d-sr" }
+agent2d-pipeline = { path = "../../../crates/agent2d-pipeline" }
+base64 = "0.22"
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+uuid.workspace = true

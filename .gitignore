@@ -1,0 +1,9 @@
+/target/
+/mcp/server/node_modules/
+/mcp/server/dist/
+.DS_Store
+*.tmp
+*.partial
+node_modules/
+dist/
+apps/desktop/src-tauri/gen/
