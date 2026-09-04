@@ -62,6 +62,38 @@ try {
   assertSuccess(compressionEnvelope, "compress");
   if (compressionEnvelope.data?.pixelExact !== true) throw new Error("compress was not pixel-exact");
 
+  let jxlPixelExact = null;
+  if (capabilityEnvelope.data?.compression?.jxlLossless === true) {
+    const jxlPath = join(temp, "compressed.jxl");
+    const jxlCompression = await client.callTool({
+      name: "agent2d_compress",
+      arguments: { inputPath: input, outputPath: jxlPath, mode: "exact", format: "jxl" },
+    });
+    const jxlEnvelope = parseTextResult(jxlCompression);
+    assertSuccess(jxlEnvelope, "compress-jxl");
+    if (jxlEnvelope.data?.pixelExact !== true) throw new Error("JXL compress was not pixel-exact");
+    jxlPixelExact = jxlEnvelope.data.pixelExact;
+
+    const jxlInspection = await client.callTool({
+      name: "agent2d_inspect",
+      arguments: { inputPath: jxlPath },
+    });
+    const jxlInspectionEnvelope = parseTextResult(jxlInspection);
+    assertSuccess(jxlInspectionEnvelope, "inspect-jxl");
+    if (jxlInspectionEnvelope.data?.width !== 4 || jxlInspectionEnvelope.data?.height !== 3) {
+      throw new Error(`unexpected JXL dimensions ${JSON.stringify(jxlInspectionEnvelope.data)}`);
+    }
+
+    const jxlRoundTripPath = join(temp, "jxl-roundtrip.png");
+    const jxlRoundTrip = await client.callTool({
+      name: "agent2d_compress",
+      arguments: { inputPath: jxlPath, outputPath: jxlRoundTripPath, mode: "exact", format: "png" },
+    });
+    const jxlRoundTripEnvelope = parseTextResult(jxlRoundTrip);
+    assertSuccess(jxlRoundTripEnvelope, "jxl-to-png");
+    if (jxlRoundTripEnvelope.data?.pixelExact !== true) throw new Error("JXL to PNG was not pixel-exact");
+  }
+
   const upscaledPath = join(temp, "upscaled.png");
   const upscale = await client.callTool({
     name: "agent2d_upscale",
@@ -72,6 +104,18 @@ try {
   if (upscaleEnvelope.data?.outputWidth !== 8 || upscaleEnvelope.data?.outputHeight !== 6) {
     throw new Error(`unexpected upscale result ${JSON.stringify(upscaleEnvelope.data)}`);
   }
+
+  const x1Path = join(temp, "x1.png");
+  const x1 = await client.callTool({
+    name: "agent2d_upscale",
+    arguments: { inputPath: input, outputPath: x1Path, scale: 1, mode: "balanced" },
+  });
+  const x1Envelope = parseTextResult(x1);
+  assertSuccess(x1Envelope, "upscale-x1");
+  if (x1Envelope.data?.outputWidth !== 4 || x1Envelope.data?.outputHeight !== 3) {
+    throw new Error(`x1 changed dimensions ${JSON.stringify(x1Envelope.data)}`);
+  }
+  if (x1Envelope.data?.modelId != null) throw new Error("x1 unexpectedly ran an SR model");
 
   const optimizedPath = join(temp, "optimized.png");
   const optimize = await client.callTool({
@@ -98,7 +142,9 @@ try {
       tools: tools.tools.map((tool) => tool.name).sort(),
       inspected: [inspectionEnvelope.data.width, inspectionEnvelope.data.height],
       compressedPixelExact: compressionEnvelope.data.pixelExact,
+      jxlPixelExact,
       upscaled: [upscaleEnvelope.data.outputWidth, upscaleEnvelope.data.outputHeight],
+      x1: [x1Envelope.data.outputWidth, x1Envelope.data.outputHeight],
       optimized: [optimizeEnvelope.data.outputWidth, optimizeEnvelope.data.outputHeight],
       discoveredModels: capabilityEnvelope.data.superResolution.models.length,
     }),

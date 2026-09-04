@@ -81,16 +81,18 @@ npm run tauri -- build --bundles app
 
 Primary Desktop functions:
 
-- drag & drop / file picker
+- window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
+- single-image replace mode or multi-image queue mode with sequential batch processing
 - Before / After preview
 - Enhance / Compress / Optimize
-- x2 / x4
-- model selection
-- PNG Exact / WebP Lossless / AVIF Preserve
-- output location selection
+- x1 / x2 / x4
+- Mode / Model selection with contextual hover guidance
+- PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality
+- cross-format conversion through the shared Rust Core
+- single-image output location selection or automatic per-input batch output
 - asynchronous jobs
 - progress display
-- real cancellation of NCNN / cwebp / ffmpeg child processes
+- real cancellation of NCNN / cwebp / cjxl / ffmpeg child processes
 - partial-output cleanup
 - output size / elapsed time / pixel-exact result
 
@@ -118,7 +120,8 @@ agent2d_capabilities
 
 Core quality checks include:
 
-- exact PNG pixel-digest fixtures
+- exact PNG/WebP/JXL pixel-digest fixtures and AVIF/JPEG preserve fixtures
+- extended PNG/JPEG/WebP/AVIF/JXL input inspection and conversion paths
 - all managed Real-ESRGAN logical models
 - actual NCNN cancellation and partial-output cleanup
 - 1536×1024 → 3072×2048 M3 Air benchmark

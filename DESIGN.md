@@ -39,22 +39,21 @@ CLI ─────────┘
 
 - macOS Apple Silicon
 - 完全ローカル処理
-- PNG / JPEG入力
-- PNG / JPEG / WebP / AVIF出力
+- PNG / JPEG / WebP / AVIF / JXL入力
+- PNG / JPEG / WebP / AVIF / JXL出力
 - Real-ESRGAN系超解像
 - Exact Lossless圧縮
 - Visually Lossless圧縮
 - x2 / x4相当の超解像
-- 1枚処理
+- Coreは1枚単位処理、Desktopは同じCoreを使う逐次multi-image queue
 - progress / cancel
 - before / after確認
 
 ## 1.2 NEXT
 
-- batch processing
+- multi-image個別設定 / 部分再実行
 - 複数超解像model
 - automatic model routing
-- JPEG XL
 - native x2 / x3モデル
 - Core ML backend benchmark
 - metadata / ICC / HDR対応強化
@@ -627,7 +626,7 @@ interface CompressRequest {
   inputPath: string;
   outputPath: string;
   mode: "exact" | "preserve" | "compact";
-  format?: "png" | "jpeg" | "webp" | "avif";
+  format?: "png" | "jpeg" | "webp" | "avif" | "jxl";
   targetBytes?: number;
   preserveMetadata?: boolean;
 }
@@ -644,10 +643,11 @@ interface OptimizeRequest {
     targetWidth?: number;
     targetHeight?: number;
     mode: "fidelity" | "balanced" | "perceptual";
+    modelId?: string;
   };
   compression: {
     mode: "exact" | "preserve" | "compact";
-    format?: "png" | "jpeg" | "webp" | "avif";
+    format?: "png" | "jpeg" | "webp" | "avif" | "jxl";
     targetBytes?: number;
   };
 }
@@ -740,11 +740,13 @@ MVP画面は1 workspaceでよい。
 
 必要機能:
 
-- drag & drop
-- before / after slider
+- window-wide drag & drop
+- single replace / multi-image queue toggle
+- before / after preview
 - Enhance / Compress / Optimize
+- Mode / Model contextual help
 - preset
-- output format
+- output format / cross-format conversion
 - expected / final file size
 - progress
 - cancel

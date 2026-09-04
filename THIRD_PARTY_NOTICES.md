@@ -1,6 +1,6 @@
 # Agent-2D Third-Party Notices
 
-Updated: 2026-09-02
+Updated: 2026-09-03
 
 This document records the main third-party boundaries used by Agent-2D v0.1. It is an engineering inventory, not legal advice.
 
@@ -55,11 +55,12 @@ Agent-2D Desktop uses Tauri 2, React, Vite, and their dependency graphs. Cargo a
 
 Agent-2D currently uses:
 
-- Rust `image`/PNG code for Exact PNG processing.
+- Rust `image`/PNG code for Exact PNG processing and PNG/JPEG/WebP decoding where supported.
 - `cwebp` when WebP Lossless is requested.
-- `ffmpeg` / `ffprobe` with `libaom-av1` when AVIF Preserve is requested.
+- `ffmpeg` / `ffprobe` with `libaom-av1` when AVIF Preserve is requested, for high-quality JPEG output, and for AVIF/JXL probing or intermediate decoding where required.
+- `cjxl` from the JPEG XL / libjxl toolchain when JXL Lossless is requested. JXL output is verified against decoded pixels before success is reported.
 
-These external codec executables are discovered from the local system in v0.1 and are not bundled by Agent-2D. A future fully self-contained public distribution should either bundle compatible codec implementations with their notices or replace these adapters with in-process codecs.
+These external codec executables are discovered from the local system and are not bundled by Agent-2D. The current source changes therefore do not add libjxl, FFmpeg, WebP, or AV1 binaries to the application bundle. A future fully self-contained public distribution must review the exact redistributed codec builds and include all applicable upstream license texts/notices, or replace these adapters with audited in-process codecs.
 
 ## Agent-2D license
 

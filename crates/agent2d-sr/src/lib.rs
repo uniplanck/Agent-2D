@@ -12,7 +12,7 @@ use agent2d_core::{
     SuperResolutionPreset, UpscaleRequest, UpscaleScale, cleanup_output, inspect_image,
     validate_output_path,
 };
-use image::GenericImageView;
+use image::{GenericImageView, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -72,34 +72,105 @@ pub fn upscale_image_with_cancel(
     let runtime = discover_runtime()?;
     let models = discover_models(&runtime.model_dir)?;
     let model_id = resolve_model_id(request, &models)?;
-    let scale = request.scale.unwrap_or(UpscaleScale::X2).get();
+    let requested_scale = request.scale.unwrap_or(UpscaleScale::X2).get();
+    if requested_scale == 1 {
+        return Err(Agent2DError::UnsupportedUpscale {
+            message: "scale 1 is a no-SR conversion path and must be handled by the caller without starting the NCNN runtime".into(),
+        });
+    }
     let output_format = output_format_for_path(&request.output_path)?;
-
-    let args: Vec<OsString> = vec![
-        "-i".into(),
-        request.input_path.as_os_str().into(),
-        "-o".into(),
-        request.output_path.as_os_str().into(),
-        "-m".into(),
-        runtime.model_dir.as_os_str().into(),
-        "-n".into(),
-        model_id.clone().into(),
-        "-s".into(),
-        scale.to_string().into(),
-        "-t".into(),
-        "0".into(),
-        "-f".into(),
-        output_format.into(),
-    ];
-
     if request.target_width.is_some() || request.target_height.is_some() {
         return Err(Agent2DError::UnsupportedUpscale {
             message: "custom target dimensions are not supported by the managed official NCNN runtime; use scale 2/3/4".into(),
         });
     }
-    let expected = Some((input.width * scale as u32, input.height * scale as u32));
 
-    run_ncnn(&runtime.backend, &args, &request.output_path, cancellation)?;
+    let model_native_scale = models
+        .iter()
+        .find(|model| model.id == model_id)
+        .map(|model| model.native_scale)
+        .unwrap_or(requested_scale);
+    let backend_scale = if model_native_scale > 0 && requested_scale < model_native_scale {
+        model_native_scale
+    } else {
+        requested_scale
+    };
+    let needs_downsample = backend_scale != requested_scale;
+    let backend_output = if needs_downsample {
+        std::env::temp_dir().join(format!(
+            "agent2d-sr-native-{backend_scale}x-{}.png",
+            Uuid::new_v4()
+        ))
+    } else {
+        request.output_path.clone()
+    };
+    let backend_format = if needs_downsample { "png" } else { output_format };
+
+    let prepared_input = prepare_sr_input(&request.input_path, &input.format, cancellation)?;
+    let backend_input = prepared_input.as_deref().unwrap_or(&request.input_path);
+    let args: Vec<OsString> = vec![
+        "-i".into(),
+        backend_input.as_os_str().into(),
+        "-o".into(),
+        backend_output.as_os_str().into(),
+        "-m".into(),
+        runtime.model_dir.as_os_str().into(),
+        "-n".into(),
+        model_id.clone().into(),
+        "-s".into(),
+        backend_scale.to_string().into(),
+        "-t".into(),
+        "0".into(),
+        "-f".into(),
+        backend_format.into(),
+    ];
+
+    let expected = Some((
+        input.width * requested_scale as u32,
+        input.height * requested_scale as u32,
+    ));
+
+    let run_result = run_ncnn(&runtime.backend, &args, &backend_output, cancellation);
+    if let Some(path) = prepared_input.as_ref() {
+        cleanup_output(path);
+    }
+    if let Err(error) = run_result {
+        if needs_downsample {
+            cleanup_output(&backend_output);
+        }
+        return Err(error);
+    }
+
+    if needs_downsample {
+        if cancellation.is_cancelled() {
+            cleanup_output(&backend_output);
+            cleanup_output(&request.output_path);
+            return Err(Agent2DError::Cancelled);
+        }
+        let native = match image::open(&backend_output) {
+            Ok(image) => image,
+            Err(source) => {
+                cleanup_output(&backend_output);
+                cleanup_output(&request.output_path);
+                return Err(Agent2DError::ImageDecode {
+                    path: display_path(&backend_output),
+                    source,
+                });
+            }
+        };
+        let target_width = input.width * requested_scale as u32;
+        let target_height = input.height * requested_scale as u32;
+        let resized = native.resize_exact(target_width, target_height, FilterType::Lanczos3);
+        if let Err(error) = resized.save(&request.output_path) {
+            cleanup_output(&backend_output);
+            cleanup_output(&request.output_path);
+            return Err(Agent2DError::ImageWrite {
+                path: display_path(&request.output_path),
+                message: error.to_string(),
+            });
+        }
+        cleanup_output(&backend_output);
+    }
 
     let output_bytes = fs::metadata(&request.output_path)
         .map_err(|error| Agent2DError::ImageWrite {
@@ -149,11 +220,77 @@ pub fn upscale_image_with_cancel(
         codec: None,
         pixel_exact: Some(false),
         elapsed_ms: started.elapsed().as_millis() as u64,
-        warnings: vec![
-            "super_resolution_may_generate_plausible_details".into(),
-            format!("managed_runtime_{}", RUNTIME_RELEASE_ID),
-        ],
+        warnings: {
+            let mut warnings = vec![
+                "super_resolution_may_generate_plausible_details".into(),
+                format!("managed_runtime_{}", RUNTIME_RELEASE_ID),
+            ];
+            if needs_downsample {
+                warnings.push(format!(
+                    "native_scale_{backend_scale}_downsampled_to_{requested_scale}_lanczos3"
+                ));
+            }
+            warnings
+        },
     })
+}
+
+fn prepare_sr_input(
+    input: &Path,
+    format: &str,
+    cancellation: &CancellationToken,
+) -> Result<Option<PathBuf>, Agent2DError> {
+    if !matches!(format, "avif" | "jxl") {
+        return Ok(None);
+    }
+    let temp = std::env::temp_dir().join(format!("agent2d-sr-input-{}.png", Uuid::new_v4()));
+    let mut child = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-n", "-i"])
+        .arg(input)
+        .args(["-frames:v", "1", "-c:v", "png"])
+        .arg(&temp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Agent2DError::BackendUnavailable {
+                    backend: "ffmpeg".into(),
+                }
+            } else {
+                Agent2DError::BackendFailed {
+                    backend: "ffmpeg".into(),
+                    message: error.to_string(),
+                }
+            }
+        })?;
+
+    loop {
+        if cancellation.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            cleanup_output(&temp);
+            return Err(Agent2DError::Cancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(Some(temp)),
+            Ok(Some(_)) => {
+                cleanup_output(&temp);
+                return Err(Agent2DError::BackendFailed {
+                    backend: "ffmpeg".into(),
+                    message: "input conversion for super-resolution failed".into(),
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                cleanup_output(&temp);
+                return Err(Agent2DError::BackendFailed {
+                    backend: "ffmpeg".into(),
+                    message: error.to_string(),
+                });
+            }
+        }
+    }
 }
 
 fn run_ncnn(
@@ -349,5 +486,41 @@ mod tests {
         assert_eq!((result.output_width, result.output_height), (48, 32));
         assert_eq!(result.model_id.as_deref(), Some(DEFAULT_MODEL));
         assert!(result.output_bytes > 0);
+        if DEFAULT_MODEL == "realesrgan-x4plus" {
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .any(|warning| warning == "native_scale_4_downsampled_to_2_lanczos3")
+            );
+        }
+    }
+
+    #[test]
+    fn actual_x4plus_x4_uses_native_scale_without_downsample_when_available() {
+        if capabilities().is_err() {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input-x4.png");
+        let output = dir.path().join("output-x4.png");
+        RgbImage::from_pixel(12, 8, Rgb([24, 80, 160]))
+            .save_with_format(&input, ImageFormat::Png)
+            .unwrap();
+
+        let result = upscale_image(&UpscaleRequest {
+            input_path: input,
+            output_path: output,
+            scale: Some(UpscaleScale::X4),
+            target_width: None,
+            target_height: None,
+            mode: SuperResolutionMode::Fidelity,
+            preset: None,
+            model_id: Some("realesrgan-x4plus".into()),
+        })
+        .unwrap();
+
+        assert_eq!((result.output_width, result.output_height), (48, 32));
+        assert!(!result.warnings.iter().any(|warning| warning.contains("downsampled")));
     }
 }

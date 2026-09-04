@@ -60,6 +60,7 @@ pub struct InspectResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpscaleScale {
+    X1,
     X2,
     X3,
     X4,
@@ -68,6 +69,7 @@ pub enum UpscaleScale {
 impl UpscaleScale {
     pub const fn get(self) -> u8 {
         match self {
+            Self::X1 => 1,
             Self::X2 => 2,
             Self::X3 => 3,
             Self::X4 => 4,
@@ -90,11 +92,12 @@ impl<'de> Deserialize<'de> for UpscaleScale {
         D: Deserializer<'de>,
     {
         match u8::deserialize(deserializer)? {
+            1 => Ok(Self::X1),
             2 => Ok(Self::X2),
             3 => Ok(Self::X3),
             4 => Ok(Self::X4),
             other => Err(serde::de::Error::custom(format!(
-                "unsupported upscale scale {other}; expected 2, 3, or 4"
+                "unsupported upscale scale {other}; expected 1, 2, 3, or 4"
             ))),
         }
     }
@@ -132,6 +135,7 @@ pub enum OutputFormat {
     Jpeg,
     Webp,
     Avif,
+    Jxl,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,6 +169,7 @@ pub struct UpscaleOptions {
     pub target_width: Option<u32>,
     pub target_height: Option<u32>,
     pub mode: SuperResolutionMode,
+    pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

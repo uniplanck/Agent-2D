@@ -19,7 +19,7 @@ const server = new Server(
 );
 
 const pathProperty = { type: "string", minLength: 1 } as const;
-const scaleProperty = { type: "integer", enum: [2, 3, 4] } as const;
+const scaleProperty = { type: "integer", enum: [1, 2, 3, 4] } as const;
 const srModeProperty = {
   type: "string",
   enum: ["fidelity", "balanced", "perceptual"],
@@ -30,14 +30,14 @@ const compressionModeProperty = {
 } as const;
 const outputFormatProperty = {
   type: "string",
-  enum: ["png", "jpeg", "webp", "avif"],
+  enum: ["png", "jpeg", "webp", "avif", "jxl"],
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "agent2d_inspect",
-      description: "Inspect a local PNG/JPEG through the shared Agent-2D Core.",
+      description: "Inspect a local PNG/JPEG/WebP/AVIF/JXL through the shared Agent-2D Core.",
       inputSchema: {
         type: "object",
         properties: { inputPath: pathProperty },
@@ -47,7 +47,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "agent2d_upscale",
-      description: "Upscale a local image using Agent-2D's NCNN super-resolution backend.",
+      description: "Enhance a local image. scale=1 preserves dimensions and performs conversion/compression only; scale=2/3/4 uses the NCNN super-resolution backend.",
       inputSchema: {
         type: "object",
         properties: {
@@ -81,7 +81,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "agent2d_optimize",
-      description: "Run super-resolution followed by compression as one Agent-2D pipeline.",
+      description: "Run Agent-2D optimization. scale=1 skips super-resolution and performs conversion/compression only; higher scales run SR then compression.",
       inputSchema: {
         type: "object",
         properties: {
@@ -89,6 +89,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: pathProperty,
           scale: scaleProperty,
           srMode: srModeProperty,
+          modelId: { type: "string", minLength: 1 },
           compressionMode: compressionModeProperty,
           format: outputFormatProperty,
           targetWidth: { type: "integer", minimum: 1 },
@@ -168,7 +169,7 @@ function buildCompressArgs(args: Record<string, unknown>): string[] {
     "--mode",
     optionalEnum(args, "mode", ["exact", "preserve", "compact"], "exact"),
     "--format",
-    requiredEnum(args, "format", ["png", "jpeg", "webp", "avif"]),
+    requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"]),
   ];
 }
 
@@ -184,8 +185,9 @@ function buildOptimizeArgs(args: Record<string, unknown>): string[] {
     "--compression-mode",
     optionalEnum(args, "compressionMode", ["exact", "preserve", "compact"], "exact"),
     "--format",
-    optionalEnum(args, "format", ["png", "jpeg", "webp", "avif"], "png"),
+    optionalEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"], "png"),
   ];
+  appendString(command, "--model", args.modelId);
   appendNumber(command, "--target-width", args.targetWidth);
   appendNumber(command, "--target-height", args.targetHeight);
   return command;
@@ -278,8 +280,8 @@ function appendNumber(command: string[], flag: string, value: unknown): void {
 function optionalScale(args: Record<string, unknown>, key: string, fallback: number): number {
   const value = args[key];
   if (value === undefined) return fallback;
-  if (value === 2 || value === 3 || value === 4) return value;
-  throw new Error(`${key} must be 2, 3, or 4`);
+  if (value === 1 || value === 2 || value === 3 || value === 4) return value;
+  throw new Error(`${key} must be 1, 2, 3, or 4`);
 }
 
 function requiredEnum(args: Record<string, unknown>, key: string, allowed: readonly string[]): string {

@@ -1,6 +1,7 @@
 use std::{
+    ffi::OsString,
     fs::{self, File},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -49,17 +50,13 @@ pub fn compress_image_with_cancel(
 
     let pixel_exact = match (request.mode, format) {
         (CompressionMode::Exact, OutputFormat::Png) => {
-            if input.bit_depth != 8 {
+            if input.bit_depth > 8 && input.format == "png" {
                 return Err(Agent2DError::UnsupportedCompression {
                     mode: "exact".into(),
                     format: "png_non_8_bit".into(),
                 });
             }
-            encode_png_exact(&request.input_path, &request.output_path)?;
-            if cancellation.is_cancelled() {
-                cleanup_output(&request.output_path);
-                return Err(Agent2DError::Cancelled);
-            }
+            encode_png_exact(&request.input_path, &request.output_path, cancellation)?;
             verify_pixel_exact(&request.input_path, &request.output_path)?;
             Some(true)
         }
@@ -68,9 +65,22 @@ pub fn compress_image_with_cancel(
             verify_pixel_exact(&request.input_path, &request.output_path)?;
             Some(true)
         }
+        (CompressionMode::Exact, OutputFormat::Jxl) => {
+            run_cjxl_lossless(&request.input_path, &request.output_path, cancellation)?;
+            verify_pixel_exact(&request.input_path, &request.output_path)?;
+            Some(true)
+        }
         (CompressionMode::Preserve, OutputFormat::Avif) => {
             run_ffmpeg_avif_preserve(&request.input_path, &request.output_path, cancellation)?;
             warnings.push("avif_preserve_is_visually_lossless_not_pixel_exact".to_owned());
+            Some(false)
+        }
+        (CompressionMode::Preserve, OutputFormat::Jpeg) => {
+            run_ffmpeg_jpeg_preserve(&request.input_path, &request.output_path, cancellation)?;
+            warnings.push("jpeg_preserve_is_high_quality_lossy_not_pixel_exact".to_owned());
+            if input.has_alpha {
+                warnings.push("jpeg_output_drops_alpha".to_owned());
+            }
             Some(false)
         }
         (mode, format) => {
@@ -81,6 +91,11 @@ pub fn compress_image_with_cancel(
         }
     };
 
+    if cancellation.is_cancelled() {
+        cleanup_output(&request.output_path);
+        return Err(Agent2DError::Cancelled);
+    }
+
     let output_bytes = fs::metadata(&request.output_path)
         .map_err(|error| Agent2DError::ImageWrite {
             path: display_path(&request.output_path),
@@ -89,7 +104,7 @@ pub fn compress_image_with_cancel(
         .len();
 
     let (output_width, output_height) = match format {
-        OutputFormat::Png | OutputFormat::Webp => {
+        OutputFormat::Png | OutputFormat::Webp | OutputFormat::Jpeg => {
             let decoded =
                 image::open(&request.output_path).map_err(|source| Agent2DError::ImageDecode {
                     path: display_path(&request.output_path),
@@ -97,8 +112,7 @@ pub fn compress_image_with_cancel(
                 })?;
             decoded.dimensions()
         }
-        OutputFormat::Avif => probe_dimensions(&request.output_path)?,
-        OutputFormat::Jpeg => unreachable!("JPEG compression is not enabled in F2"),
+        OutputFormat::Avif | OutputFormat::Jxl => probe_dimensions(&request.output_path)?,
     };
 
     if output_width != input.width || output_height != input.height {
@@ -135,21 +149,40 @@ pub fn compress_image_with_cancel(
 }
 
 pub fn pixel_digest(path: &Path) -> Result<PixelDigest, Agent2DError> {
-    let decoded = image::open(path).map_err(|source| Agent2DError::ImageDecode {
-        path: display_path(path),
-        source,
-    })?;
+    match image::open(path) {
+        Ok(decoded) => Ok(digest_decoded(decoded)),
+        Err(_) => {
+            let temp = temporary_png_path();
+            let token = CancellationToken::new();
+            let converted = run_ffmpeg_png_decode(path, &temp, &token);
+            if let Err(error) = converted {
+                cleanup_output(&temp);
+                return Err(error);
+            }
+            let result = image::open(&temp).map(digest_decoded).map_err(|source| {
+                Agent2DError::ImageDecode {
+                    path: display_path(path),
+                    source,
+                }
+            });
+            cleanup_output(&temp);
+            result
+        }
+    }
+}
+
+fn digest_decoded(decoded: image::DynamicImage) -> PixelDigest {
     let rgba = decoded.to_rgba8();
     let (width, height) = rgba.dimensions();
     let mut hasher = Sha256::new();
     hasher.update(width.to_le_bytes());
     hasher.update(height.to_le_bytes());
     hasher.update(rgba.as_raw());
-    Ok(PixelDigest {
+    PixelDigest {
         width,
         height,
         sha256: format!("{:x}", hasher.finalize()),
-    })
+    }
 }
 
 pub fn verify_pixel_exact(input: &Path, output: &Path) -> Result<(), Agent2DError> {
@@ -177,11 +210,18 @@ fn resolve_output_format(
     }
 }
 
-fn encode_png_exact(input: &Path, output: &Path) -> Result<(), Agent2DError> {
-    let decoded = image::open(input).map_err(|source| Agent2DError::ImageDecode {
-        path: display_path(input),
-        source,
-    })?;
+fn encode_png_exact(
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let decoded = match image::open(input) {
+        Ok(decoded) => decoded,
+        Err(_) => return run_ffmpeg_png_decode(input, output, cancellation),
+    };
     let (width, height) = decoded.dimensions();
     let file = File::create(output).map_err(|error| Agent2DError::ImageWrite {
         path: display_path(output),
@@ -211,15 +251,73 @@ fn run_cwebp_lossless(
     output: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
-    run_backend(
+    let prepared = prepare_png_for_backend(input, cancellation, &["avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let result = run_backend(
         "cwebp",
-        [
+        vec![
             "-quiet".into(),
             "-lossless".into(),
             "-z".into(),
             "9".into(),
-            input.as_os_str().into(),
+            source.as_os_str().into(),
             "-o".into(),
+            output.as_os_str().into(),
+        ],
+        output,
+        cancellation,
+    );
+    if let Some(path) = prepared {
+        cleanup_output(&path);
+    }
+    result
+}
+
+fn run_cjxl_lossless(
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    let prepared = prepare_png_for_backend(input, cancellation, &["webp", "avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let result = run_backend(
+        "cjxl",
+        vec![
+            source.as_os_str().into(),
+            output.as_os_str().into(),
+            "-d".into(),
+            "0".into(),
+            "-e".into(),
+            "7".into(),
+            "--quiet".into(),
+        ],
+        output,
+        cancellation,
+    );
+    if let Some(path) = prepared {
+        cleanup_output(&path);
+    }
+    result
+}
+
+fn run_ffmpeg_png_decode(
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    run_backend(
+        "ffmpeg",
+        vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-n".into(),
+            "-i".into(),
+            input.as_os_str().into(),
+            "-frames:v".into(),
+            "1".into(),
+            "-c:v".into(),
+            "png".into(),
             output.as_os_str().into(),
         ],
         output,
@@ -234,7 +332,7 @@ fn run_ffmpeg_avif_preserve(
 ) -> Result<(), Agent2DError> {
     run_backend(
         "ffmpeg",
-        [
+        vec![
             "-hide_banner".into(),
             "-loglevel".into(),
             "error".into(),
@@ -262,9 +360,61 @@ fn run_ffmpeg_avif_preserve(
     )
 }
 
-fn run_backend<const N: usize>(
+fn run_ffmpeg_jpeg_preserve(
+    input: &Path,
+    output: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    run_backend(
+        "ffmpeg",
+        vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-n".into(),
+            "-i".into(),
+            input.as_os_str().into(),
+            "-frames:v".into(),
+            "1".into(),
+            "-c:v".into(),
+            "mjpeg".into(),
+            "-q:v".into(),
+            "2".into(),
+            output.as_os_str().into(),
+        ],
+        output,
+        cancellation,
+    )
+}
+
+fn prepare_png_for_backend(
+    input: &Path,
+    cancellation: &CancellationToken,
+    extensions: &[&str],
+) -> Result<Option<PathBuf>, Agent2DError> {
+    let extension = input
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !extensions.contains(&extension.as_str()) {
+        return Ok(None);
+    }
+    let temp = temporary_png_path();
+    if let Err(error) = run_ffmpeg_png_decode(input, &temp, cancellation) {
+        cleanup_output(&temp);
+        return Err(error);
+    }
+    Ok(Some(temp))
+}
+
+fn temporary_png_path() -> PathBuf {
+    std::env::temp_dir().join(format!("agent2d-codec-{}.png", Uuid::new_v4()))
+}
+
+fn run_backend(
     backend: &str,
-    args: [std::ffi::OsString; N],
+    args: Vec<OsString>,
     output_path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
@@ -389,6 +539,7 @@ fn output_format_name(format: OutputFormat) -> &'static str {
         OutputFormat::Jpeg => "jpeg",
         OutputFormat::Webp => "webp",
         OutputFormat::Avif => "avif",
+        OutputFormat::Jxl => "jxl",
     }
 }
 
@@ -490,6 +641,79 @@ mod tests {
         assert_eq!((result.output_width, result.output_height), (96, 64));
         assert_eq!(result.pixel_exact, Some(false));
         assert_eq!(result.codec.as_deref(), Some("avif"));
+    }
+
+    #[test]
+    fn jpeg_preserve_accepts_png_input_when_ffmpeg_exists() {
+        if !command_exists("ffmpeg") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        let output = dir.path().join("output.jpeg");
+        write_fixture(&input);
+        let result = compress_image(&request(
+            input,
+            output,
+            CompressionMode::Preserve,
+            OutputFormat::Jpeg,
+        ))
+        .unwrap();
+        assert_eq!((result.output_width, result.output_height), (96, 64));
+        assert_eq!(result.pixel_exact, Some(false));
+        assert_eq!(result.codec.as_deref(), Some("jpeg"));
+    }
+
+    #[test]
+    fn jxl_lossless_is_pixel_exact_when_cjxl_exists() {
+        if !command_exists("cjxl") || !command_exists("ffmpeg") || !command_exists("ffprobe") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        let output = dir.path().join("output.jxl");
+        write_fixture(&input);
+        let result = compress_image(&request(
+            input.clone(),
+            output.clone(),
+            CompressionMode::Exact,
+            OutputFormat::Jxl,
+        ))
+        .unwrap();
+        assert_eq!(result.pixel_exact, Some(true));
+        assert_eq!(result.codec.as_deref(), Some("jxl"));
+        assert_eq!(
+            pixel_digest(&input).unwrap(),
+            pixel_digest(&output).unwrap()
+        );
+    }
+
+    #[test]
+    fn avif_input_can_convert_back_to_pixel_exact_png() {
+        if !command_exists("ffmpeg") || !command_exists("ffprobe") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.png");
+        let avif = dir.path().join("source.avif");
+        let png = dir.path().join("converted.png");
+        write_fixture(&source);
+        compress_image(&request(
+            source,
+            avif.clone(),
+            CompressionMode::Preserve,
+            OutputFormat::Avif,
+        ))
+        .unwrap();
+        let result = compress_image(&request(
+            avif,
+            png,
+            CompressionMode::Exact,
+            OutputFormat::Png,
+        ))
+        .unwrap();
+        assert_eq!(result.pixel_exact, Some(true));
+        assert_eq!((result.output_width, result.output_height), (96, 64));
     }
 
     #[test]

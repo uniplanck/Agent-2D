@@ -76,6 +76,8 @@ enum Command {
         scale: ScaleArg,
         #[arg(long, value_enum, default_value_t = SrModeArg::Balanced)]
         sr_mode: SrModeArg,
+        #[arg(long)]
+        model: Option<String>,
         #[arg(long, value_enum, default_value_t = CompressionModeArg::Exact)]
         compression_mode: CompressionModeArg,
         #[arg(long, value_enum, default_value_t = OutputFormatArg::Png)]
@@ -116,6 +118,7 @@ enum OutputFormatArg {
     Jpeg,
     Webp,
     Avif,
+    Jxl,
 }
 
 impl From<OutputFormatArg> for OutputFormat {
@@ -125,12 +128,15 @@ impl From<OutputFormatArg> for OutputFormat {
             OutputFormatArg::Jpeg => OutputFormat::Jpeg,
             OutputFormatArg::Webp => OutputFormat::Webp,
             OutputFormatArg::Avif => OutputFormat::Avif,
+            OutputFormatArg::Jxl => OutputFormat::Jxl,
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ScaleArg {
+    #[value(name = "1")]
+    X1,
     #[value(name = "2")]
     X2,
     #[value(name = "3")]
@@ -142,6 +148,7 @@ enum ScaleArg {
 impl From<ScaleArg> for UpscaleScale {
     fn from(value: ScaleArg) -> Self {
         match value {
+            ScaleArg::X1 => UpscaleScale::X1,
             ScaleArg::X2 => UpscaleScale::X2,
             ScaleArg::X3 => UpscaleScale::X3,
             ScaleArg::X4 => UpscaleScale::X4,
@@ -200,6 +207,8 @@ struct CompressionCapabilities {
     png_exact: bool,
     webp_lossless: bool,
     avif_preserve: bool,
+    jpeg_preserve: bool,
+    jxl_lossless: bool,
 }
 
 fn main() -> ExitCode {
@@ -242,19 +251,49 @@ fn main() -> ExitCode {
             target_width,
             target_height,
         } => {
-            let request = UpscaleRequest {
-                input_path: input,
-                output_path: output,
-                scale: Some(scale.into()),
-                target_width,
-                target_height,
-                mode: mode.into(),
-                preset: preset.map(Into::into),
-                model_id: model,
-            };
-            match upscale_image(&request) {
-                Ok(result) => success(&result, cli.pretty),
-                Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+            if matches!(scale, ScaleArg::X1) {
+                let (format, compression_mode) = conversion_format_for_output(&output);
+                match format {
+                    Some(format) => {
+                        let request = CompressRequest {
+                            input_path: input,
+                            output_path: output,
+                            mode: compression_mode,
+                            format: Some(format),
+                            target_bytes: None,
+                            preserve_metadata: Some(false),
+                        };
+                        match compress_image(&request) {
+                            Ok(mut result) => {
+                                result.warnings.push("sr_skipped_scale_1_dimensions_preserved".into());
+                                success(&result, cli.pretty)
+                            }
+                            Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+                        }
+                    }
+                    None => failure::<Agent2DResult>(
+                        agent2d_core::Agent2DError::UnsupportedCompression {
+                            mode: "x1_conversion".into(),
+                            format: output.extension().and_then(|value| value.to_str()).unwrap_or("unknown").into(),
+                        }.payload(),
+                        cli.pretty,
+                    ),
+                }
+            } else {
+                let request = UpscaleRequest {
+                    input_path: input,
+                    output_path: output,
+                    scale: Some(scale.into()),
+                    target_width,
+                    target_height,
+                    mode: mode.into(),
+                    preset: preset.map(Into::into),
+                    model_id: model,
+                };
+                match upscale_image(&request) {
+                    Ok(result) => success(&result, cli.pretty),
+                    Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+                }
             }
         }
         Command::Optimize {
@@ -262,6 +301,7 @@ fn main() -> ExitCode {
             output,
             scale,
             sr_mode,
+            model,
             compression_mode,
             format,
             target_width,
@@ -275,6 +315,7 @@ fn main() -> ExitCode {
                     target_width,
                     target_height,
                     mode: sr_mode.into(),
+                    model_id: model,
                 }),
                 compression: CompressionOptions {
                     mode: compression_mode.into(),
@@ -295,6 +336,10 @@ fn main() -> ExitCode {
                         png_exact: true,
                         webp_lossless: command_exists("cwebp"),
                         avif_preserve: command_exists("ffmpeg") && command_exists("ffprobe"),
+                        jpeg_preserve: command_exists("ffmpeg"),
+                        jxl_lossless: command_exists("cjxl")
+                            && command_exists("ffmpeg")
+                            && command_exists("ffprobe"),
                     },
                     super_resolution,
                 },
@@ -310,6 +355,22 @@ fn main() -> ExitCode {
             Ok(status) => success(&status, cli.pretty),
             Err(error) => failure::<RuntimeStatus>(error.payload(), cli.pretty),
         },
+    }
+}
+
+fn conversion_format_for_output(path: &PathBuf) -> (Option<OutputFormat>, CompressionMode) {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => (Some(OutputFormat::Png), CompressionMode::Exact),
+        Some("webp") => (Some(OutputFormat::Webp), CompressionMode::Exact),
+        Some("jxl") => (Some(OutputFormat::Jxl), CompressionMode::Exact),
+        Some("jpg") | Some("jpeg") => (Some(OutputFormat::Jpeg), CompressionMode::Preserve),
+        Some("avif") => (Some(OutputFormat::Avif), CompressionMode::Preserve),
+        _ => (None, CompressionMode::Exact),
     }
 }
 

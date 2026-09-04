@@ -2,7 +2,7 @@ export type Operation = "enhance" | "compress" | "optimize";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve";
-export type OutputFormat = "png" | "webp" | "avif";
+export type OutputFormat = "png" | "jpeg" | "webp" | "avif" | "jxl";
 
 export interface ErrorPayload {
   code: string;
@@ -44,7 +44,7 @@ export interface DesktopJobRequest {
   operation: Operation;
   inputPath: string;
   outputPath: string;
-  scale: 2 | 4;
+  scale: 1 | 2 | 4;
   srMode: SrMode;
   compressionMode: CompressionMode;
   format: OutputFormat;

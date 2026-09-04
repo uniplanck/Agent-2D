@@ -3,7 +3,7 @@ use std::time::Instant;
 use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, InspectRequest,
-    OptimizeRequest, UpscaleRequest, inspect_image,
+    OptimizeRequest, UpscaleRequest, UpscaleScale, inspect_image,
 };
 use agent2d_sr::upscale_image_with_cancel;
 use tempfile::tempdir;
@@ -39,6 +39,23 @@ pub fn optimize_image_with_cancel(
         );
     };
 
+    if matches!(upscale.scale, Some(UpscaleScale::X1)) {
+        let mut result = compress_image_with_cancel(
+            &CompressRequest {
+                input_path: request.input_path.clone(),
+                output_path: request.output_path.clone(),
+                mode: request.compression.mode,
+                format: request.compression.format,
+                target_bytes: request.compression.target_bytes,
+                preserve_metadata: Some(false),
+            },
+            cancellation,
+        )?;
+        result.elapsed_ms = started.elapsed().as_millis() as u64;
+        result.warnings.push("sr_skipped_scale_1_dimensions_preserved".into());
+        return Ok(result);
+    }
+
     let temp = tempdir().map_err(|error| Agent2DError::ImageWrite {
         path: "temporary_directory".into(),
         message: error.to_string(),
@@ -54,7 +71,7 @@ pub fn optimize_image_with_cancel(
             target_height: upscale.target_height,
             mode: upscale.mode,
             preset: None,
-            model_id: None,
+            model_id: upscale.model_id.clone(),
         },
         cancellation,
     )?;
@@ -134,6 +151,7 @@ mod tests {
                 target_width: None,
                 target_height: None,
                 mode: SuperResolutionMode::Balanced,
+                model_id: None,
             }),
             compression: CompressionOptions {
                 mode: CompressionMode::Exact,
@@ -155,6 +173,39 @@ mod tests {
                 .iter()
                 .any(|warning| warning == "combined_pipeline_sr_then_compression")
         );
+    }
+
+    #[test]
+    fn x1_optimize_skips_sr_and_preserves_dimensions() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        let output = dir.path().join("optimized-x1.png");
+        RgbImage::from_pixel(16, 8, Rgb([32, 64, 96]))
+            .save_with_format(&input, ImageFormat::Png)
+            .unwrap();
+
+        let result = optimize_image(&OptimizeRequest {
+            input_path: input,
+            output_path: output,
+            upscale: Some(UpscaleOptions {
+                scale: Some(UpscaleScale::X1),
+                target_width: None,
+                target_height: None,
+                mode: SuperResolutionMode::Balanced,
+                model_id: Some("realesrgan-x4plus".into()),
+            }),
+            compression: CompressionOptions {
+                mode: CompressionMode::Exact,
+                format: Some(OutputFormat::Png),
+                target_bytes: None,
+            },
+        })
+        .unwrap();
+
+        assert_eq!((result.output_width, result.output_height), (16, 8));
+        assert_eq!(result.model_id, None);
+        assert_eq!(result.pixel_exact, Some(true));
+        assert!(result.warnings.iter().any(|warning| warning == "sr_skipped_scale_1_dimensions_preserved"));
     }
 
     #[test]
