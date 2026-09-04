@@ -1,4 +1,4 @@
-export type Operation = "enhance" | "compress" | "optimize";
+export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve";
@@ -49,6 +49,11 @@ export interface DesktopJobRequest {
   compressionMode: CompressionMode;
   format: OutputFormat;
   modelId?: string | null;
+  targetWidth?: number | null;
+  targetHeight?: number | null;
+  cropZoom?: number | null;
+  cropX?: number | null;
+  cropY?: number | null;
 }
 
 export interface DesktopJobStatus {

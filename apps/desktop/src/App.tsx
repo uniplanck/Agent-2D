@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -187,7 +187,15 @@ function outputFor(input: string, operation: Operation, format: OutputFormat, ba
   const stem = dot > 0 ? file.slice(0, dot) : file;
   const sourceExt = dot > 0 ? file.slice(dot + 1).toLowerCase() : "image";
   const sourceTag = batch ? `-${sourceExt}` : "";
-  const suffix = operation === "enhance" ? "enhanced" : operation === "compress" ? "compressed" : "optimized";
+  const suffix = operation === "enhance"
+    ? "enhanced"
+    : operation === "compress"
+      ? "compressed"
+      : operation === "crop"
+        ? "cropped"
+        : operation === "resize"
+          ? "resized"
+          : "optimized";
   const ext = operation === "enhance" ? "png" : format;
   return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
 }
@@ -211,6 +219,7 @@ function withExtension(filename: string, format: OutputFormat): string {
 function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 | 2 | 4): number {
   const megapixels = Math.max(0.1, (info.width * info.height) / 1_000_000);
   const compressionMs = 650 + megapixels * 520;
+  if (operation === "crop" || operation === "resize") return 850 + megapixels * 620;
   if (operation === "compress" || scale === 1) return compressionMs;
   const srMs = scale === 4
     ? 2_800 + megapixels * 12_500
@@ -226,6 +235,8 @@ function stageLabel(stage?: string): string {
     case "compression": return "圧縮 / 変換";
     case "conversion_only": return "解像度維持 / 変換";
     case "compression_conversion_only": return "解像度維持 / 圧縮・変換";
+    case "crop_to_size": return "指定サイズで切り取り";
+    case "resize_to_size": return "指定サイズへ縮小";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
     case "cancelled": return "キャンセル済み";
@@ -253,7 +264,13 @@ function errorText(error: unknown): string {
 function modeLabel(mode: Operation): string {
   if (mode === "enhance") return "Enhance";
   if (mode === "compress") return "Compress";
+  if (mode === "crop") return "Crop to Size";
+  if (mode === "resize") return "Resize to Size";
   return "Optimize";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function compressionModeFor(format: OutputFormat): CompressionMode {
@@ -299,9 +316,17 @@ export default function App() {
   const [comparePosition, setComparePosition] = useState(50);
   const [clock, setClock] = useState(() => Date.now());
   const [jobTiming, setJobTiming] = useState<{ startedAt: number; estimatedMs: number } | null>(null);
+  const [targetWidth, setTargetWidth] = useState(1024);
+  const [targetHeight, setTargetHeight] = useState(1024);
+  const [cropZoom, setCropZoom] = useState(1);
+  const [cropX, setCropX] = useState(0);
+  const [cropY, setCropY] = useState(0);
+  const [cropFrameSize, setCropFrameSize] = useState({ width: 0, height: 0 });
   const cancelBatchRef = useRef(false);
   const outputDirectoryPinnedRef = useRef(false);
   const compareStageRef = useRef<HTMLDivElement>(null);
+  const cropStageRef = useRef<HTMLDivElement>(null);
+  const cropDragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
 
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
@@ -326,6 +351,9 @@ export default function App() {
       setOutputName(outputNameFor(path, operation, effectiveFormat));
       setOutputPath("");
       setComparePosition(50);
+      setCropZoom(1);
+      setCropX(0);
+      setCropY(0);
       return true;
     } catch (cause) {
       setError(errorText(cause));
@@ -408,6 +436,27 @@ export default function App() {
   }, [effectiveFormat, inputPath, operation, running]);
 
   useEffect(() => {
+    if (operation === "crop" && multiMode && !running) {
+      setMultiMode(false);
+      setQueue([]);
+    }
+  }, [multiMode, operation, running]);
+
+  useEffect(() => {
+    if (operation !== "crop") return;
+    const stage = cropStageRef.current;
+    if (!stage) return;
+    const update = () => {
+      const rect = stage.getBoundingClientRect();
+      setCropFrameSize({ width: rect.width, height: rect.height });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [inputPreview, operation, targetHeight, targetWidth]);
+
+  useEffect(() => {
     if (!backendRunning) return;
     const timer = window.setInterval(() => setClock(Date.now()), 250);
     return () => window.clearInterval(timer);
@@ -455,6 +504,11 @@ export default function App() {
       compressionMode: compressionModeFor(effectiveFormat),
       format: effectiveFormat,
       modelId: modelId || null,
+      targetWidth: operation === "crop" || operation === "resize" ? targetWidth : null,
+      targetHeight: operation === "crop" || operation === "resize" ? targetHeight : null,
+      cropZoom: operation === "crop" ? cropZoom : null,
+      cropX: operation === "crop" ? cropX : null,
+      cropY: operation === "crop" ? cropY : null,
     };
     try {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
@@ -488,7 +542,7 @@ export default function App() {
       setJobTiming(null);
       return null;
     }
-  }, [effectiveFormat, modelId, operation, scale, srMode]);
+  }, [cropX, cropY, cropZoom, effectiveFormat, modelId, operation, scale, srMode, targetHeight, targetWidth]);
 
   const start = async () => {
     if (running) return;
@@ -623,6 +677,75 @@ export default function App() {
     setComparePosition(Math.min(96, Math.max(4, position)));
   }, []);
 
+  const resizePreviewDimensions = useMemo(() => {
+    if (!inputInfo || targetWidth <= 0 || targetHeight <= 0) return null;
+    const scaleFactor = Math.min(1, targetWidth / inputInfo.width, targetHeight / inputInfo.height);
+    return {
+      width: Math.max(1, Math.min(targetWidth, Math.round(inputInfo.width * scaleFactor))),
+      height: Math.max(1, Math.min(targetHeight, Math.round(inputInfo.height * scaleFactor))),
+    };
+  }, [inputInfo, targetHeight, targetWidth]);
+
+  const cropImageStyle = useMemo(() => {
+    if (!inputInfo || !inputPreview || cropFrameSize.width <= 0 || cropFrameSize.height <= 0) return undefined;
+    const baseScale = Math.max(cropFrameSize.width / inputInfo.width, cropFrameSize.height / inputInfo.height);
+    const drawWidth = inputInfo.width * baseScale * cropZoom;
+    const drawHeight = inputInfo.height * baseScale * cropZoom;
+    const overflowX = Math.max(0, drawWidth - cropFrameSize.width);
+    const overflowY = Math.max(0, drawHeight - cropFrameSize.height);
+    return {
+      width: `${drawWidth}px`,
+      height: `${drawHeight}px`,
+      left: `${(cropFrameSize.width - drawWidth) / 2 - cropX * overflowX / 2}px`,
+      top: `${(cropFrameSize.height - drawHeight) / 2 - cropY * overflowY / 2}px`,
+    };
+  }, [cropFrameSize, cropX, cropY, cropZoom, inputInfo, inputPreview]);
+
+  const adjustCrop = useCallback((deltaX: number, deltaY: number) => {
+    setCropX((value) => clamp(value + deltaX, -1, 1));
+    setCropY((value) => clamp(value + deltaY, -1, 1));
+  }, []);
+
+  const setCropPreset = (width: number, height: number) => {
+    setTargetWidth(width);
+    setTargetHeight(height);
+    setCropZoom(1);
+    setCropX(0);
+    setCropY(0);
+  };
+
+  const handleCropPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!inputInfo || !inputPreview) return;
+    event.currentTarget.focus();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    cropDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      baseX: cropX,
+      baseY: cropY,
+    };
+  };
+
+  const handleCropPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = cropDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !inputInfo) return;
+    const baseScale = Math.max(cropFrameSize.width / inputInfo.width, cropFrameSize.height / inputInfo.height);
+    const drawWidth = inputInfo.width * baseScale * cropZoom;
+    const drawHeight = inputInfo.height * baseScale * cropZoom;
+    const overflowX = Math.max(0, drawWidth - cropFrameSize.width);
+    const overflowY = Math.max(0, drawHeight - cropFrameSize.height);
+    const deltaPixelsX = event.clientX - drag.startX;
+    const deltaPixelsY = event.clientY - drag.startY;
+    setCropX(overflowX > 0 ? clamp(drag.baseX - (2 * deltaPixelsX) / overflowX, -1, 1) : 0);
+    setCropY(overflowY > 0 ? clamp(drag.baseY - (2 * deltaPixelsY) / overflowY, -1, 1) : 0);
+  };
+
+  const endCropDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (cropDragRef.current?.pointerId === event.pointerId) cropDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
   return (
     <main className={`app-shell ${dragActive ? "dragging" : ""}`}>
       {dragActive && (
@@ -658,10 +781,10 @@ export default function App() {
       </header>
 
       <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize"] as Operation[]).map((item) => (
+        {(["enhance", "compress", "optimize", "crop", "resize"] as Operation[]).map((item) => (
           <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
             {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : "超解像 + 圧縮"}</small>
+            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "位置・ズーム指定" : "比率維持で縮小"}</small>
           </button>
         ))}
       </section>
@@ -670,7 +793,7 @@ export default function App() {
         <aside className="control-panel">
           <div className="section-heading">
             <div className="section-label">SOURCE</div>
-            <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running}>
+            <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running || operation === "crop"} title={operation === "crop" ? "Crop to Size は1枚ずつ構図を調整します" : undefined}>
               <span className="toggle-track"><i /></span>
               複数 {multiMode ? "ON" : "OFF"}
             </button>
@@ -710,7 +833,65 @@ export default function App() {
             </div>
           )}
 
-          {operation !== "compress" && (
+          {(operation === "crop" || operation === "resize") && (
+            <>
+              <div className="section-label">TARGET SIZE</div>
+              <div className="field-row two size-fields">
+                <label>
+                  <span>Width · px</span>
+                  <input type="number" min={1} max={32768} value={targetWidth} onChange={(event) => setTargetWidth(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
+                </label>
+                <label>
+                  <span>Height · px</span>
+                  <input type="number" min={1} max={32768} value={targetHeight} onChange={(event) => setTargetHeight(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
+                </label>
+              </div>
+              <div className="size-toolbar">
+                <button type="button" onClick={() => { setTargetWidth(targetHeight); setTargetHeight(targetWidth); }} disabled={running}>↔ W/H</button>
+                <button type="button" onClick={() => setCropPreset(1024, 1024)} disabled={running}>1024²</button>
+                <button type="button" onClick={() => setCropPreset(1080, 1350)} disabled={running}>1080×1350</button>
+                <button type="button" onClick={() => setCropPreset(1080, 1920)} disabled={running}>1080×1920</button>
+                <button type="button" onClick={() => setCropPreset(1200, 630)} disabled={running}>1200×630</button>
+              </div>
+              {operation === "resize" ? (
+                <div className="transform-note">
+                  <strong>Fit Within · アスペクト比維持</strong>
+                  <span>{resizePreviewDimensions ? `出力予定 ${resizePreviewDimensions.width}×${resizePreviewDimensions.height}px` : "指定枠内へ縮小"}</span>
+                  <span>元画像より大きい指定でも拡大しません。</span>
+                </div>
+              ) : (
+                <div className="crop-controls">
+                  <div className="crop-zoom-head"><span>Zoom</span><strong>{cropZoom.toFixed(2)}×</strong></div>
+                  <div className="crop-zoom-row">
+                    <button type="button" onClick={() => setCropZoom((value) => clamp(value - 0.1, 1, 6))} disabled={running}>−</button>
+                    <input type="range" min={1} max={6} step={0.01} value={cropZoom} onChange={(event) => setCropZoom(Number(event.target.value))} disabled={running} />
+                    <button type="button" onClick={() => setCropZoom((value) => clamp(value + 0.1, 1, 6))} disabled={running}>＋</button>
+                  </div>
+                  <div className="nudge-area">
+                    <span>位置</span>
+                    <div className="nudge-pad">
+                      <button type="button" className="up" onClick={() => adjustCrop(0, -0.04)} disabled={running}>↑</button>
+                      <button type="button" className="left" onClick={() => adjustCrop(-0.04, 0)} disabled={running}>←</button>
+                      <button type="button" className="center" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>●</button>
+                      <button type="button" className="right" onClick={() => adjustCrop(0.04, 0)} disabled={running}>→</button>
+                      <button type="button" className="down" onClick={() => adjustCrop(0, 0.04)} disabled={running}>↓</button>
+                    </div>
+                  </div>
+                  <div className="crop-reset-row">
+                    <button type="button" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>位置Reset</button>
+                    <button type="button" onClick={() => setCropZoom(1)} disabled={running}>Zoom Reset</button>
+                    <button type="button" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }} disabled={running}>中央Fit</button>
+                  </div>
+                  <div className="transform-note compact">
+                    <span>プレビューをドラッグ / ホイール / 矢印キーで調整。Shift+矢印は大きく、Option+矢印は細かく移動。</span>
+                    {inputInfo && (inputInfo.width < targetWidth || inputInfo.height < targetHeight) && <span className="size-warning">指定サイズが元画像より大きいため、Crop出力ではLanczos補間が入る場合があります。</span>}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {(operation === "enhance" || operation === "optimize") && (
             <>
               <div className="section-label">SUPER RESOLUTION</div>
               <div className="field-row two">
@@ -816,7 +997,7 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{scale === 1 && operation !== "compress" ? "SR skip" : `${scale}×`}</span></div>
+              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "crop" ? `${targetWidth}×${targetHeight}` : operation === "resize" ? `≤ ${targetWidth}×${targetHeight}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? "SR skip" : operation === "compress" ? effectiveFormat.toUpperCase() : `${scale}×`}</span></div>
             </div>
           )}
 
@@ -831,6 +1012,57 @@ export default function App() {
         </aside>
 
         <section className="preview-area">
+          {operation === "crop" ? (
+            <figure className="crop-card">
+              <figcaption>
+                <div><span className="before-label">CROP FRAME</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div className="crop-caption-center">{targetWidth}×{targetHeight}px · {cropZoom.toFixed(2)}×</div>
+                <div><span className="after-label">OUTPUT</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}</div>
+              </figcaption>
+              <div className="crop-workbench">
+                <div
+                  ref={cropStageRef}
+                  className="crop-frame"
+                  style={{ aspectRatio: `${targetWidth} / ${targetHeight}` }}
+                  tabIndex={0}
+                  role="application"
+                  aria-label="Crop preview. Drag, wheel, or arrow keys to adjust."
+                  onPointerDown={handleCropPointerDown}
+                  onPointerMove={handleCropPointerMove}
+                  onPointerUp={endCropDrag}
+                  onPointerCancel={endCropDrag}
+                  onWheel={(event) => {
+                    if (!inputPreview || running) return;
+                    event.preventDefault();
+                    setCropZoom((value) => clamp(value + (event.deltaY < 0 ? 0.12 : -0.12), 1, 6));
+                  }}
+                  onKeyDown={(event) => {
+                    if (running) return;
+                    const step = event.shiftKey ? 0.1 : event.altKey ? 0.012 : 0.035;
+                    if (event.key === "ArrowLeft") { event.preventDefault(); adjustCrop(-step, 0); }
+                    else if (event.key === "ArrowRight") { event.preventDefault(); adjustCrop(step, 0); }
+                    else if (event.key === "ArrowUp") { event.preventDefault(); adjustCrop(0, -step); }
+                    else if (event.key === "ArrowDown") { event.preventDefault(); adjustCrop(0, step); }
+                    else if (event.key === "Enter") { event.preventDefault(); void start(); }
+                    else if (event.key === "Escape") { event.preventDefault(); setCropX(0); setCropY(0); }
+                  }}
+                >
+                  {inputPreview ? (
+                    <>
+                      <img className="crop-image" src={inputPreview} alt="Crop source" style={cropImageStyle} draggable={false} />
+                      <div className="crop-grid-overlay" aria-hidden="true"><i /><i /><i /><i /></div>
+                      <div className="crop-edge-shade" aria-hidden="true" />
+                    </>
+                  ) : <div className="empty-preview">Drop an image anywhere</div>}
+                </div>
+              </div>
+              <div className="crop-helpbar">
+                <span>Drag · Wheel · ↑↓←→</span>
+                <span>Shift = 大きく / Option = 細かく</span>
+                <span>最小Zoomは空白が出ないCover</span>
+              </div>
+            </figure>
+          ) : (
           <figure className="comparison-card">
             <figcaption>
               <div><span className="before-label">BEFORE</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
@@ -891,6 +1123,7 @@ export default function App() {
               ) : <div className="empty-preview">Drop an image anywhere</div>}
             </div>
           </figure>
+          )}
 
           <div className="result-strip">
             <div><span>INPUT</span><strong>{bytes(result?.inputBytes ?? inputInfo?.inputBytes)}</strong></div>

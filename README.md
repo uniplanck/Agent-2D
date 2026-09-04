@@ -84,8 +84,10 @@ Primary Desktop functions:
 - window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
 - single-image replace mode or multi-image queue mode with sequential batch processing
 - Before / After preview
-- Enhance / Compress / Optimize
+- Enhance / Compress / Optimize / Crop to Size / Resize to Size
 - x1 / x2 / x4
+- Crop to Size with target-pixel framing, drag / wheel / keyboard / nudge controls
+- Resize to Size as aspect-preserving Fit Within with no automatic upscaling
 - Mode / Model selection with contextual hover guidance
 - PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality
 - cross-format conversion through the shared Rust Core

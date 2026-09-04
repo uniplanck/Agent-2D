@@ -2,9 +2,10 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
     thread,
+    time::{Duration, Instant},
 };
 
 use agent2d_compression::compress_image_with_cancel;
@@ -12,7 +13,7 @@ use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
     CompressionOptions, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
     OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleRequest, UpscaleScale,
-    cleanup_output, inspect_image,
+    cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_pipeline::optimize_image_with_cancel;
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime, upscale_image_with_cancel};
@@ -29,6 +30,8 @@ enum DesktopOperation {
     Enhance,
     Compress,
     Optimize,
+    Crop,
+    Resize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +45,11 @@ struct DesktopJobRequest {
     compression_mode: String,
     format: String,
     model_id: Option<String>,
+    target_width: Option<u32>,
+    target_height: Option<u32>,
+    crop_zoom: Option<f64>,
+    crop_x: Option<f64>,
+    crop_y: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -122,6 +130,180 @@ fn parse_compression_mode(value: &str) -> Result<CompressionMode, Agent2DError> 
     }
 }
 
+fn fit_within_dimensions(input_width: u32, input_height: u32, target_width: u32, target_height: u32) -> (u32, u32) {
+    if input_width <= target_width && input_height <= target_height {
+        return (input_width, input_height);
+    }
+    let scale = (target_width as f64 / input_width as f64)
+        .min(target_height as f64 / input_height as f64)
+        .min(1.0);
+    let width = ((input_width as f64 * scale).round() as u32).clamp(1, target_width);
+    let height = ((input_height as f64 * scale).round() as u32).clamp(1, target_height);
+    (width, height)
+}
+
+fn crop_geometry(
+    input_width: u32,
+    input_height: u32,
+    target_width: u32,
+    target_height: u32,
+    zoom: f64,
+    offset_x: f64,
+    offset_y: f64,
+) -> (u32, u32, u32, u32) {
+    let source_aspect = input_width as f64 / input_height as f64;
+    let target_aspect = target_width as f64 / target_height as f64;
+    let (base_width, base_height) = if source_aspect >= target_aspect {
+        (input_height as f64 * target_aspect, input_height as f64)
+    } else {
+        (input_width as f64, input_width as f64 / target_aspect)
+    };
+    let zoom = zoom.clamp(1.0, 6.0);
+    let crop_width = ((base_width / zoom).round() as u32).clamp(1, input_width);
+    let crop_height = ((base_height / zoom).round() as u32).clamp(1, input_height);
+    let max_x = input_width.saturating_sub(crop_width);
+    let max_y = input_height.saturating_sub(crop_height);
+    let x = ((max_x as f64 * (offset_x.clamp(-1.0, 1.0) + 1.0) / 2.0).round() as u32).min(max_x);
+    let y = ((max_y as f64 * (offset_y.clamp(-1.0, 1.0) + 1.0) / 2.0).round() as u32).min(max_y);
+    (x, y, crop_width, crop_height)
+}
+
+fn run_transform_to_png(
+    input: &Path,
+    output: &Path,
+    filter: &str,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let mut child = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-n", "-i"])
+        .arg(input)
+        .args(["-vf", filter, "-frames:v", "1", "-c:v", "png"])
+        .arg(output)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                Agent2DError::BackendUnavailable { backend: "ffmpeg".into() }
+            } else {
+                Agent2DError::BackendFailed { backend: "ffmpeg".into(), message: error.to_string() }
+            }
+        })?;
+    loop {
+        if cancellation.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            cleanup_output(output);
+            return Err(Agent2DError::Cancelled);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(_)) => {
+                cleanup_output(output);
+                return Err(Agent2DError::BackendFailed {
+                    backend: "ffmpeg".into(),
+                    message: "transform backend exited with a non-zero status".into(),
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => {
+                cleanup_output(output);
+                return Err(Agent2DError::BackendFailed { backend: "ffmpeg".into(), message: error.to_string() });
+            }
+        }
+    }
+}
+
+fn transform_then_compress(
+    request: &DesktopJobRequest,
+    cancellation: &CancellationToken,
+    crop: bool,
+    format: OutputFormat,
+    compression_mode: CompressionMode,
+) -> Result<Agent2DResult, Agent2DError> {
+    let started = Instant::now();
+    let input_path = PathBuf::from(&request.input_path);
+    let output_path = PathBuf::from(&request.output_path);
+    validate_output_path(&input_path, &output_path)?;
+    let input = inspect_image(&InspectRequest { input_path: input_path.clone() })?;
+    let target_width = request.target_width.filter(|value| *value > 0).ok_or_else(|| Agent2DError::UnsupportedCompression {
+        mode: if crop { "crop".into() } else { "resize".into() },
+        format: "target_width_required".into(),
+    })?;
+    let target_height = request.target_height.filter(|value| *value > 0).ok_or_else(|| Agent2DError::UnsupportedCompression {
+        mode: if crop { "crop".into() } else { "resize".into() },
+        format: "target_height_required".into(),
+    })?;
+    let temp = std::env::temp_dir().join(format!("agent2d-transform-{}.png", Uuid::new_v4()));
+    let (filter, expected_width, expected_height, mut warnings) = if crop {
+        let zoom = request.crop_zoom.unwrap_or(1.0).clamp(1.0, 6.0);
+        let (x, y, crop_width, crop_height) = crop_geometry(
+            input.width,
+            input.height,
+            target_width,
+            target_height,
+            zoom,
+            request.crop_x.unwrap_or(0.0),
+            request.crop_y.unwrap_or(0.0),
+        );
+        let mut warnings = vec!["crop_to_size_applied".to_owned()];
+        if crop_width < target_width || crop_height < target_height {
+            warnings.push("crop_interpolated_to_target_size".to_owned());
+        }
+        (
+            format!("crop={crop_width}:{crop_height}:{x}:{y},scale={target_width}:{target_height}:flags=lanczos"),
+            target_width,
+            target_height,
+            warnings,
+        )
+    } else {
+        let (width, height) = fit_within_dimensions(input.width, input.height, target_width, target_height);
+        let mut warnings = vec!["resize_fit_within_aspect_preserved".to_owned()];
+        if width == input.width && height == input.height {
+            warnings.push("resize_no_upscale_source_already_within_bounds".to_owned());
+        }
+        (format!("scale={width}:{height}:flags=lanczos"), width, height, warnings)
+    };
+
+    let transform_result = run_transform_to_png(&input_path, &temp, &filter, cancellation);
+    if let Err(error) = transform_result {
+        cleanup_output(&temp);
+        return Err(error);
+    }
+    let compressed = compress_image_with_cancel(
+        &CompressRequest {
+            input_path: temp.clone(),
+            output_path: output_path.clone(),
+            mode: compression_mode,
+            format: Some(format),
+            target_bytes: None,
+            preserve_metadata: Some(false),
+        },
+        cancellation,
+    );
+    cleanup_output(&temp);
+    let mut result = compressed?;
+    if result.output_width != expected_width || result.output_height != expected_height {
+        cleanup_output(&output_path);
+        return Err(Agent2DError::ProbeFailed {
+            message: format!("transform output dimension mismatch: expected {expected_width}x{expected_height}, got {}x{}", result.output_width, result.output_height),
+        });
+    }
+    result.input_path = input_path;
+    result.input_width = input.width;
+    result.input_height = input.height;
+    result.input_bytes = input.input_bytes;
+    result.compression_ratio = if result.output_bytes == 0 { 0.0 } else { input.input_bytes as f64 / result.output_bytes as f64 };
+    result.pixel_exact = Some(false);
+    result.elapsed_ms = started.elapsed().as_millis() as u64;
+    warnings.extend(result.warnings);
+    result.warnings = warnings;
+    Ok(result)
+}
+
 fn execute_job(
     request: &DesktopJobRequest,
     cancellation: &CancellationToken,
@@ -191,6 +373,8 @@ fn execute_job(
             },
             cancellation,
         ),
+        DesktopOperation::Crop => transform_then_compress(request, cancellation, true, format, compression_mode),
+        DesktopOperation::Resize => transform_then_compress(request, cancellation, false, format, compression_mode),
     }
 }
 
@@ -374,6 +558,8 @@ fn start_job_command(
                 (DesktopOperation::Enhance, _) => "super_resolution",
                 (DesktopOperation::Compress, _) => "compression",
                 (DesktopOperation::Optimize, _) => "super_resolution_then_compression",
+                (DesktopOperation::Crop, _) => "crop_to_size",
+                (DesktopOperation::Resize, _) => "resize_to_size",
             }
             .into();
         });
@@ -497,10 +683,104 @@ mod tests {
             compression_mode: "exact".into(),
             format: "png".into(),
             model_id: None,
+            target_width: None,
+            target_height: None,
+            crop_zoom: None,
+            crop_x: None,
+            crop_y: None,
         };
         assert!(matches!(
             execute_job(&request, &token),
             Err(Agent2DError::Cancelled)
         ));
+    }
+
+    #[test]
+    fn fit_within_preserves_aspect_and_never_upscales() {
+        assert_eq!(fit_within_dimensions(3000, 2000, 1024, 1024), (1024, 683));
+        assert_eq!(fit_within_dimensions(640, 480, 1024, 1024), (640, 480));
+        assert_eq!(fit_within_dimensions(2000, 3000, 1080, 1350), (900, 1350));
+    }
+
+    #[test]
+    fn crop_geometry_maps_center_edges_and_zoom() {
+        assert_eq!(crop_geometry(3000, 2000, 1024, 1024, 1.0, 0.0, 0.0), (500, 0, 2000, 2000));
+        assert_eq!(crop_geometry(3000, 2000, 1024, 1024, 1.0, -1.0, 0.0), (0, 0, 2000, 2000));
+        assert_eq!(crop_geometry(3000, 2000, 1024, 1024, 1.0, 1.0, 0.0), (1000, 0, 2000, 2000));
+        assert_eq!(crop_geometry(3000, 2000, 1024, 1024, 2.0, 0.0, 0.0), (1000, 500, 1000, 1000));
+    }
+
+    fn make_ffmpeg_fixture(path: &Path, width: u32, height: u32) -> bool {
+        Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("testsrc2=size={width}x{height}:rate=1"))
+            .args(["-frames:v", "1", "-c:v", "png"])
+            .arg(path)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn transform_request(operation: DesktopOperation, input: &Path, output: &Path, width: u32, height: u32) -> DesktopJobRequest {
+        DesktopJobRequest {
+            operation,
+            input_path: input.to_string_lossy().into_owned(),
+            output_path: output.to_string_lossy().into_owned(),
+            scale: 2,
+            sr_mode: "balanced".into(),
+            compression_mode: "exact".into(),
+            format: "png".into(),
+            model_id: None,
+            target_width: Some(width),
+            target_height: Some(height),
+            crop_zoom: Some(1.0),
+            crop_x: Some(0.0),
+            crop_y: Some(0.0),
+        }
+    }
+
+    #[test]
+    fn crop_to_size_writes_exact_dimensions() {
+        let dir = std::env::temp_dir().join(format!("agent2d-crop-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.png");
+        let output = dir.join("crop.png");
+        if !make_ffmpeg_fixture(&input, 300, 200) {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let result = execute_job(
+            &transform_request(DesktopOperation::Crop, &input, &output, 100, 100),
+            &CancellationToken::new(),
+        ).unwrap();
+        assert_eq!((result.output_width, result.output_height), (100, 100));
+        assert!(output.is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resize_to_size_fits_within_and_does_not_upscale() {
+        let dir = std::env::temp_dir().join(format!("agent2d-resize-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.png");
+        if !make_ffmpeg_fixture(&input, 300, 200) {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let output = dir.join("resize.png");
+        let result = execute_job(
+            &transform_request(DesktopOperation::Resize, &input, &output, 100, 100),
+            &CancellationToken::new(),
+        ).unwrap();
+        assert_eq!((result.output_width, result.output_height), (100, 67));
+
+        let large_output = dir.join("resize-large.png");
+        let large = execute_job(
+            &transform_request(DesktopOperation::Resize, &input, &large_output, 1000, 1000),
+            &CancellationToken::new(),
+        ).unwrap();
+        assert_eq!((large.output_width, large.output_height), (300, 200));
+        assert!(large.warnings.iter().any(|warning| warning == "resize_no_upscale_source_already_within_bounds"));
+        let _ = fs::remove_dir_all(&dir);
     }
 }
