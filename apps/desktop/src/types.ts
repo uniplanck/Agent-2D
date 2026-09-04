@@ -1,7 +1,7 @@
 export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
-export type CompressionMode = "exact" | "preserve";
+export type CompressionMode = "exact" | "preserve" | "compact";
 export type OutputFormat = "png" | "jpeg" | "webp" | "avif" | "jxl";
 
 export interface ErrorPayload {
@@ -54,6 +54,7 @@ export interface DesktopJobRequest {
   cropZoom?: number | null;
   cropX?: number | null;
   cropY?: number | null;
+  targetBytes?: number | null;
 }
 
 export interface DesktopJobStatus {

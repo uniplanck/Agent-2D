@@ -83,6 +83,26 @@ pub fn compress_image_with_cancel(
             }
             Some(false)
         }
+        (CompressionMode::Compact, format) => {
+            let target_bytes = request.target_bytes.filter(|value| *value > 0).ok_or_else(|| {
+                Agent2DError::UnsupportedCompression {
+                    mode: "compact".into(),
+                    format: "target_bytes_required".into(),
+                }
+            })?;
+            let outcome = encode_compact_to_target(
+                &request.input_path,
+                &request.output_path,
+                format,
+                target_bytes,
+                cancellation,
+            )?;
+            warnings.extend(outcome.warnings);
+            if input.has_alpha && format == OutputFormat::Jpeg {
+                warnings.push("jpeg_output_drops_alpha".to_owned());
+            }
+            outcome.pixel_exact
+        }
         (mode, format) => {
             return Err(Agent2DError::UnsupportedCompression {
                 mode: compression_mode_name(mode).into(),
@@ -365,6 +385,224 @@ fn run_ffmpeg_jpeg_preserve(
     output: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
+    run_ffmpeg_jpeg_quality(input, output, 2, cancellation)
+}
+
+#[derive(Debug)]
+struct CompactOutcome {
+    pixel_exact: Option<bool>,
+    warnings: Vec<String>,
+}
+
+fn encoded_size(path: &Path) -> Result<u64, Agent2DError> {
+    fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .map_err(|error| Agent2DError::ImageWrite {
+            path: display_path(path),
+            message: error.to_string(),
+        })
+}
+
+fn compact_accepts(output: &Path, target_bytes: u64) -> Result<bool, Agent2DError> {
+    Ok(encoded_size(output)? <= target_bytes)
+}
+
+fn compact_success(target_bytes: u64, pixel_exact: Option<bool>, detail: String) -> CompactOutcome {
+    CompactOutcome {
+        pixel_exact,
+        warnings: vec![
+            "compact_target_met".to_owned(),
+            format!("compact_target_bytes_{target_bytes}"),
+            detail,
+        ],
+    }
+}
+
+fn compact_unreachable(output: &Path, format: OutputFormat, target_bytes: u64) -> Agent2DError {
+    cleanup_output(output);
+    Agent2DError::UnsupportedCompression {
+        mode: format!("compact_target_unreachable_{target_bytes}_bytes"),
+        format: output_format_name(format).into(),
+    }
+}
+
+fn encode_compact_to_target(
+    input: &Path,
+    output: &Path,
+    format: OutputFormat,
+    target_bytes: u64,
+    cancellation: &CancellationToken,
+) -> Result<CompactOutcome, Agent2DError> {
+    match format {
+        OutputFormat::Png => {
+            encode_png_exact(input, output, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                return Ok(compact_success(target_bytes, Some(true), "compact_png_exact".into()));
+            }
+            Err(compact_unreachable(output, format, target_bytes))
+        }
+        OutputFormat::Webp => {
+            run_cwebp_lossless(input, output, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                return Ok(compact_success(target_bytes, Some(true), "compact_webp_lossless".into()));
+            }
+            cleanup_output(output);
+            for quality in [95u8, 90, 85, 80, 70, 60, 50, 40, 30, 20, 10, 5] {
+                run_cwebp_lossy(input, output, quality, cancellation)?;
+                if compact_accepts(output, target_bytes)? {
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_webp_quality_{quality}")));
+                }
+                cleanup_output(output);
+            }
+            Err(compact_unreachable(output, format, target_bytes))
+        }
+        OutputFormat::Jxl => {
+            run_cjxl_lossless(input, output, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                return Ok(compact_success(target_bytes, Some(true), "compact_jxl_lossless".into()));
+            }
+            cleanup_output(output);
+            for distance in [0.5f32, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 15.0] {
+                run_cjxl_lossy(input, output, distance, cancellation)?;
+                if compact_accepts(output, target_bytes)? {
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_jxl_distance_{distance:.1}")));
+                }
+                cleanup_output(output);
+            }
+            Err(compact_unreachable(output, format, target_bytes))
+        }
+        OutputFormat::Avif => {
+            run_ffmpeg_avif_quality(input, output, 12, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                return Ok(compact_success(target_bytes, Some(false), "compact_avif_crf_12".into()));
+            }
+            cleanup_output(output);
+            for crf in [16u8, 20, 24, 28, 32, 36, 40, 45, 50, 55, 60, 63] {
+                run_ffmpeg_avif_quality(input, output, crf, cancellation)?;
+                if compact_accepts(output, target_bytes)? {
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_avif_crf_{crf}")));
+                }
+                cleanup_output(output);
+            }
+            Err(compact_unreachable(output, format, target_bytes))
+        }
+        OutputFormat::Jpeg => {
+            run_ffmpeg_jpeg_quality(input, output, 2, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                return Ok(compact_success(target_bytes, Some(false), "compact_jpeg_q_2".into()));
+            }
+            cleanup_output(output);
+            for quality in [3u8, 4, 5, 7, 9, 12, 16, 20, 24, 28, 31] {
+                run_ffmpeg_jpeg_quality(input, output, quality, cancellation)?;
+                if compact_accepts(output, target_bytes)? {
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_jpeg_q_{quality}")));
+                }
+                cleanup_output(output);
+            }
+            Err(compact_unreachable(output, format, target_bytes))
+        }
+    }
+}
+
+fn run_cwebp_lossy(
+    input: &Path,
+    output: &Path,
+    quality: u8,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    let prepared = prepare_png_for_backend(input, cancellation, &["avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let result = run_backend(
+        "cwebp",
+        vec![
+            "-quiet".into(),
+            "-q".into(),
+            quality.to_string().into(),
+            "-m".into(),
+            "6".into(),
+            source.as_os_str().into(),
+            "-o".into(),
+            output.as_os_str().into(),
+        ],
+        output,
+        cancellation,
+    );
+    if let Some(path) = prepared {
+        cleanup_output(&path);
+    }
+    result
+}
+
+fn run_cjxl_lossy(
+    input: &Path,
+    output: &Path,
+    distance: f32,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    let prepared = prepare_png_for_backend(input, cancellation, &["webp", "avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let result = run_backend(
+        "cjxl",
+        vec![
+            source.as_os_str().into(),
+            output.as_os_str().into(),
+            "-d".into(),
+            format!("{distance:.1}").into(),
+            "-e".into(),
+            "7".into(),
+            "--quiet".into(),
+        ],
+        output,
+        cancellation,
+    );
+    if let Some(path) = prepared {
+        cleanup_output(&path);
+    }
+    result
+}
+
+fn run_ffmpeg_avif_quality(
+    input: &Path,
+    output: &Path,
+    crf: u8,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    run_backend(
+        "ffmpeg",
+        vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-n".into(),
+            "-i".into(),
+            input.as_os_str().into(),
+            "-frames:v".into(),
+            "1".into(),
+            "-c:v".into(),
+            "libaom-av1".into(),
+            "-still-picture".into(),
+            "1".into(),
+            "-crf".into(),
+            crf.to_string().into(),
+            "-cpu-used".into(),
+            "4".into(),
+            "-pix_fmt".into(),
+            "yuv444p10le".into(),
+            "-f".into(),
+            "avif".into(),
+            output.as_os_str().into(),
+        ],
+        output,
+        cancellation,
+    )
+}
+
+fn run_ffmpeg_jpeg_quality(
+    input: &Path,
+    output: &Path,
+    quality: u8,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
     run_backend(
         "ffmpeg",
         vec![
@@ -379,7 +617,7 @@ fn run_ffmpeg_jpeg_preserve(
             "-c:v".into(),
             "mjpeg".into(),
             "-q:v".into(),
-            "2".into(),
+            quality.to_string().into(),
             output.as_os_str().into(),
         ],
         output,
@@ -714,6 +952,47 @@ mod tests {
         .unwrap();
         assert_eq!(result.pixel_exact, Some(true));
         assert_eq!((result.output_width, result.output_height), (96, 64));
+    }
+
+    #[test]
+    fn jpeg_compact_respects_target_bytes_when_ffmpeg_exists() {
+        if !command_exists("ffmpeg") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        let output = dir.path().join("output.jpeg");
+        write_fixture(&input);
+        let mut compact = request(
+            input,
+            output.clone(),
+            CompressionMode::Compact,
+            OutputFormat::Jpeg,
+        );
+        compact.target_bytes = Some(4_000);
+        let result = compress_image(&compact).unwrap();
+        assert!(result.output_bytes <= 4_000);
+        assert!(result.warnings.iter().any(|warning| warning == "compact_target_met"));
+        assert_eq!((result.output_width, result.output_height), (96, 64));
+        assert!(output.exists());
+    }
+
+    #[test]
+    fn compact_png_fails_closed_when_exact_output_cannot_meet_cap() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        let output = dir.path().join("output.png");
+        write_fixture(&input);
+        let mut compact = request(
+            input,
+            output.clone(),
+            CompressionMode::Compact,
+            OutputFormat::Png,
+        );
+        compact.target_bytes = Some(1);
+        let error = compress_image(&compact).unwrap_err();
+        assert_eq!(error.code(), "unsupported_compression");
+        assert!(!output.exists());
     }
 
     #[test]

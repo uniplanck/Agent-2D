@@ -12,11 +12,11 @@ use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
     CompressionOptions, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
-    OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleRequest, UpscaleScale,
+    OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale,
     cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_pipeline::optimize_image_with_cancel;
-use agent2d_sr::{SrCapabilities, capabilities, install_runtime, upscale_image_with_cancel};
+use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -50,6 +50,7 @@ struct DesktopJobRequest {
     crop_zoom: Option<f64>,
     crop_x: Option<f64>,
     crop_y: Option<f64>,
+    target_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +124,7 @@ fn parse_compression_mode(value: &str) -> Result<CompressionMode, Agent2DError> 
     match value {
         "exact" => Ok(CompressionMode::Exact),
         "preserve" => Ok(CompressionMode::Preserve),
+        "compact" => Ok(CompressionMode::Compact),
         other => Err(Agent2DError::UnsupportedCompression {
             mode: other.into(),
             format: "desktop".into(),
@@ -279,7 +281,7 @@ fn transform_then_compress(
             output_path: output_path.clone(),
             mode: compression_mode,
             format: Some(format),
-            target_bytes: None,
+            target_bytes: request.target_bytes,
             preserve_metadata: Some(false),
         },
         cancellation,
@@ -316,40 +318,35 @@ fn execute_job(
     let compression_mode = parse_compression_mode(&request.compression_mode)?;
 
     match request.operation {
-        DesktopOperation::Enhance if scale == UpscaleScale::X1 => compress_image_with_cancel(
-            &CompressRequest {
+        DesktopOperation::Enhance => optimize_image_with_cancel(
+            &OptimizeRequest {
                 input_path,
                 output_path,
-                mode: CompressionMode::Exact,
-                format: Some(OutputFormat::Png),
-                target_bytes: None,
-                preserve_metadata: Some(false),
+                upscale: Some(UpscaleOptions {
+                    scale: Some(scale),
+                    target_width: None,
+                    target_height: None,
+                    mode: sr_mode,
+                    model_id: request.model_id.clone().filter(|value| !value.is_empty()),
+                }),
+                compression: CompressionOptions {
+                    mode: compression_mode,
+                    format: Some(format),
+                    target_bytes: request.target_bytes,
+                },
             },
             cancellation,
         ).map(|mut result| {
-            result.warnings.push("sr_skipped_scale_1_dimensions_preserved".into());
+            result.warnings.push("enhance_final_format_applied".into());
             result
         }),
-        DesktopOperation::Enhance => upscale_image_with_cancel(
-            &UpscaleRequest {
-                input_path,
-                output_path,
-                scale: Some(scale),
-                target_width: None,
-                target_height: None,
-                mode: sr_mode,
-                preset: None,
-                model_id: request.model_id.clone().filter(|value| !value.is_empty()),
-            },
-            cancellation,
-        ),
         DesktopOperation::Compress => compress_image_with_cancel(
             &CompressRequest {
                 input_path,
                 output_path,
                 mode: compression_mode,
                 format: Some(format),
-                target_bytes: None,
+                target_bytes: request.target_bytes,
                 preserve_metadata: Some(false),
             },
             cancellation,
@@ -368,7 +365,7 @@ fn execute_job(
                 compression: CompressionOptions {
                     mode: compression_mode,
                     format: Some(format),
-                    target_bytes: None,
+                    target_bytes: request.target_bytes,
                 },
             },
             cancellation,
@@ -472,7 +469,7 @@ fn preview_image_command(path: String) -> Result<String, ErrorPayload> {
 fn extension_for_output_format(format: &str) -> Result<&'static str, ErrorPayload> {
     match format {
         "png" => Ok("png"),
-        "jpg" | "jpeg" => Ok("jpeg"),
+        "jpg" | "jpeg" => Ok("jpg"),
         "webp" => Ok("webp"),
         "avif" => Ok("avif"),
         "jxl" => Ok("jxl"),
@@ -688,6 +685,7 @@ mod tests {
             crop_zoom: None,
             crop_x: None,
             crop_y: None,
+            target_bytes: None,
         };
         assert!(matches!(
             execute_job(&request, &token),
@@ -736,6 +734,7 @@ mod tests {
             crop_zoom: Some(1.0),
             crop_x: Some(0.0),
             crop_y: Some(0.0),
+            target_bytes: None,
         }
     }
 
@@ -754,6 +753,60 @@ mod tests {
             &CancellationToken::new(),
         ).unwrap();
         assert_eq!((result.output_width, result.output_height), (100, 100));
+        assert!(output.is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crop_compact_jpeg_respects_requested_max_bytes() {
+        let dir = std::env::temp_dir().join(format!("agent2d-crop-cap-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.png");
+        let output = dir.join("crop.jpeg");
+        if !make_ffmpeg_fixture(&input, 300, 200) {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let mut request = transform_request(DesktopOperation::Crop, &input, &output, 100, 100);
+        request.format = "jpeg".into();
+        request.compression_mode = "compact".into();
+        request.target_bytes = Some(8_000);
+        let result = execute_job(&request, &CancellationToken::new()).unwrap();
+        assert_eq!((result.output_width, result.output_height), (100, 100));
+        assert!(result.output_bytes <= 8_000);
+        assert!(result.warnings.iter().any(|warning| warning == "compact_target_met"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enhance_x1_can_finish_as_jpeg() {
+        let dir = std::env::temp_dir().join(format!("agent2d-enhance-format-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.png");
+        let output = dir.join("enhanced.jpeg");
+        if !make_ffmpeg_fixture(&input, 160, 90) {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let request = DesktopJobRequest {
+            operation: DesktopOperation::Enhance,
+            input_path: input.to_string_lossy().into_owned(),
+            output_path: output.to_string_lossy().into_owned(),
+            scale: 1,
+            sr_mode: "balanced".into(),
+            compression_mode: "preserve".into(),
+            format: "jpeg".into(),
+            model_id: None,
+            target_width: None,
+            target_height: None,
+            crop_zoom: None,
+            crop_x: None,
+            crop_y: None,
+            target_bytes: None,
+        };
+        let result = execute_job(&request, &CancellationToken::new()).unwrap();
+        assert_eq!((result.output_width, result.output_height), (160, 90));
+        assert_eq!(result.codec.as_deref(), Some("jpeg"));
         assert!(output.is_file());
         let _ = fs::remove_dir_all(&dir);
     }

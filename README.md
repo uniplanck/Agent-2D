@@ -84,12 +84,15 @@ Primary Desktop functions:
 - window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
 - single-image replace mode or multi-image queue mode with sequential batch processing
 - Before / After preview
-- Enhance / Compress / Optimize / Crop to Size / Resize to Size
+- Enhance / Compress / Optimize / **超カスタム**
 - x1 / x2 / x4
-- Crop to Size with target-pixel framing, drag / wheel / keyboard / nudge controls
-- Resize to Size as aspect-preserving Fit Within with no automatic upscaling
-- Mode / Model selection with contextual hover guidance
-- PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality
+- 超カスタム with target-pixel framing, drag / wheel / keyboard / nudge controls
+- reusable custom-size presets with local persistence, hover/dropdown selection, and deletion
+- optional maximum output file-size cap for 超カスタム; lossy formats reduce quality as needed, while PNG fails explicitly when Exact output cannot meet the requested cap
+- multi-format output: choose multiple final formats in one run across Enhance / Compress / Optimize / 超カスタム
+- Enhance uses lossless PNG internally where appropriate but is no longer restricted to PNG as the final format
+- Mode / Model selection with contextual hover guidance and aligned Scale / Mode / Model controls
+- PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality, plus target-size Compact encoding in 超カスタム
 - cross-format conversion through the shared Rust Core
 - single-image output location selection or automatic per-input batch output
 - asynchronous jobs
@@ -97,6 +100,10 @@ Primary Desktop functions:
 - real cancellation of NCNN / cwebp / cjxl / ffmpeg child processes
 - partial-output cleanup
 - output size / elapsed time / pixel-exact result
+
+## Future: Vectorize to SVG
+
+SVG export is intentionally treated as **vectorization**, not ordinary super resolution. The planned `Vectorize to SVG` mode targets logos, icons, line art, flat illustrations, and other shape-driven raster inputs. It is not intended as a way to make photographs infinitely detailed. The scoped design is recorded in `Dev/VECTORIZE_SVG_PLAN.md`; full implementation is deferred to a separate sprint.
 
 ## MCP
 

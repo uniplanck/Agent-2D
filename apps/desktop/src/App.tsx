@@ -26,6 +26,56 @@ interface QueueEntry {
   state: QueueState;
 }
 
+interface SavedSizePreset {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+}
+
+const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
+const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
+  { id: "png", label: "PNG", detail: "Exact" },
+  { id: "jpeg", label: "JPG", detail: "High Quality" },
+  { id: "webp", label: "WebP", detail: "Lossless / Compact" },
+  { id: "avif", label: "AVIF", detail: "Preserve / Compact" },
+  { id: "jxl", label: "JXL", detail: "Lossless / Compact" },
+];
+
+function loadSavedSizePresets(): SavedSizePreset[] {
+  try {
+    const raw = window.localStorage.getItem(CUSTOM_SIZE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((entry): entry is SavedSizePreset => {
+      if (!entry || typeof entry !== "object") return false;
+      const candidate = entry as Partial<SavedSizePreset>;
+      return typeof candidate.id === "string"
+        && typeof candidate.name === "string"
+        && typeof candidate.width === "number"
+        && typeof candidate.height === "number"
+        && candidate.width > 0
+        && candidate.height > 0;
+    }).slice(0, 40);
+  } catch {
+    return [];
+  }
+}
+
+function targetBytesFrom(value: number, unit: "KB" | "MB"): number {
+  const multiplier = unit === "MB" ? 1024 * 1024 : 1024;
+  return Math.max(1, Math.round(value * multiplier));
+}
+
+function formatQualityText(format: OutputFormat): string {
+  if (format === "png") return "PNG Exact";
+  if (format === "jpeg") return "JPEG High Quality";
+  if (format === "webp") return "WebP Lossless";
+  if (format === "avif") return "AVIF Preserve";
+  return "JXL Lossless";
+}
+
 const MODE_HELP: Record<SrMode, { title: string; body: string; use: string }> = {
   fidelity: {
     title: "Fidelity",
@@ -192,11 +242,11 @@ function outputFor(input: string, operation: Operation, format: OutputFormat, ba
     : operation === "compress"
       ? "compressed"
       : operation === "crop"
-        ? "cropped"
+        ? "custom"
         : operation === "resize"
           ? "resized"
           : "optimized";
-  const ext = operation === "enhance" ? "png" : format;
+  const ext = format === "jpeg" ? "jpg" : format;
   return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
 }
 
@@ -213,7 +263,17 @@ function withExtension(filename: string, format: OutputFormat): string {
   const trimmed = filename.trim();
   const dot = trimmed.lastIndexOf(".");
   const stem = dot > 0 ? trimmed.slice(0, dot) : trimmed;
-  return `${stem || "output"}.${format}`;
+  const ext = format === "jpeg" ? "jpg" : format;
+  return `${stem || "output"}.${ext}`;
+}
+
+function outputNameForFormat(filename: string, format: OutputFormat, multiFormat: boolean): string {
+  if (!multiFormat) return filename;
+  const trimmed = filename.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = dot > 0 ? trimmed.slice(0, dot) : trimmed;
+  const tag = format === "jpeg" ? "jpg" : format;
+  return `${stem || "output"}-${tag}`;
 }
 
 function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 | 2 | 4): number {
@@ -235,7 +295,7 @@ function stageLabel(stage?: string): string {
     case "compression": return "圧縮 / 変換";
     case "conversion_only": return "解像度維持 / 変換";
     case "compression_conversion_only": return "解像度維持 / 圧縮・変換";
-    case "crop_to_size": return "指定サイズで切り取り";
+    case "crop_to_size": return "超カスタム書き出し";
     case "resize_to_size": return "指定サイズへ縮小";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
@@ -264,7 +324,7 @@ function errorText(error: unknown): string {
 function modeLabel(mode: Operation): string {
   if (mode === "enhance") return "Enhance";
   if (mode === "compress") return "Compress";
-  if (mode === "crop") return "Crop to Size";
+  if (mode === "crop") return "超カスタム";
   if (mode === "resize") return "Resize to Size";
   return "Optimize";
 }
@@ -300,9 +360,10 @@ export default function App() {
   const [inputPreview, setInputPreview] = useState("");
   const [outputPreview, setOutputPreview] = useState("");
   const [result, setResult] = useState<Agent2DResult | null>(null);
+  const [outputResults, setOutputResults] = useState<Agent2DResult[]>([]);
   const [scale, setScale] = useState<1 | 2 | 4>(2);
   const [srMode, setSrMode] = useState<SrMode>("balanced");
-  const [format, setFormat] = useState<OutputFormat>("png");
+  const [selectedFormats, setSelectedFormats] = useState<OutputFormat[]>(["png"]);
   const [modelId, setModelId] = useState("");
   const [capabilities, setCapabilities] = useState<SrCapabilities | null>(null);
   const [runtimeChecked, setRuntimeChecked] = useState(false);
@@ -322,6 +383,12 @@ export default function App() {
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
   const [cropFrameSize, setCropFrameSize] = useState({ width: 0, height: 0 });
+  const [savedSizePresets, setSavedSizePresets] = useState<SavedSizePreset[]>(loadSavedSizePresets);
+  const [presetName, setPresetName] = useState("");
+  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
+  const [sizeCapEnabled, setSizeCapEnabled] = useState(false);
+  const [sizeCapValue, setSizeCapValue] = useState(1);
+  const [sizeCapUnit, setSizeCapUnit] = useState<"KB" | "MB">("MB");
   const cancelBatchRef = useRef(false);
   const outputDirectoryPinnedRef = useRef(false);
   const compareStageRef = useRef<HTMLDivElement>(null);
@@ -330,7 +397,10 @@ export default function App() {
 
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
-  const effectiveFormat: OutputFormat = operation === "enhance" ? "png" : format;
+  const effectiveFormat: OutputFormat = selectedFormats[0] ?? "png";
+  const customTargetBytes = operation === "crop" && sizeCapEnabled
+    ? targetBytesFrom(sizeCapValue, sizeCapUnit)
+    : null;
   const selectedModeHelp = MODE_HELP[srMode];
   const selectedModelHelp = modelHelp(modelId);
 
@@ -338,6 +408,7 @@ export default function App() {
     if (!path) return false;
     setError("");
     setResult(null);
+    setOutputResults([]);
     setOutputPreview("");
     try {
       const [info, preview] = await Promise.all([
@@ -375,6 +446,14 @@ export default function App() {
   useEffect(() => {
     void refreshCapabilities();
   }, [refreshCapabilities]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CUSTOM_SIZE_STORAGE_KEY, JSON.stringify(savedSizePresets));
+    } catch {
+      // Persistence failure must not block local image processing.
+    }
+  }, [savedSizePresets]);
 
   const installManagedRuntime = async () => {
     if (installingRuntime) return;
@@ -430,6 +509,7 @@ export default function App() {
       setOutputName(outputNameFor(inputPath, operation, effectiveFormat));
       setOutputPath("");
       setResult(null);
+      setOutputResults([]);
       setOutputPreview("");
       setComparePosition(50);
     }
@@ -485,30 +565,32 @@ export default function App() {
     }
   };
 
-  const resolveDestination = useCallback(async (filename: string): Promise<string> => {
+  const resolveDestination = useCallback(async (filename: string, targetFormat: OutputFormat): Promise<string> => {
     if (!outputDirectory) throw new Error("保存先フォルダを選択してください。");
     return invoke<string>("resolve_output_path_command", {
       directory: outputDirectory,
       filename,
-      format: effectiveFormat,
+      format: targetFormat,
     });
-  }, [effectiveFormat, outputDirectory]);
+  }, [outputDirectory]);
 
-  const runOne = useCallback(async (path: string, destination: string): Promise<DesktopJobStatus | null> => {
+  const runOne = useCallback(async (path: string, destination: string, targetFormat: OutputFormat): Promise<DesktopJobStatus | null> => {
+    const useCompact = operation === "crop" && customTargetBytes != null;
     const request: DesktopJobRequest = {
       operation,
       inputPath: path,
       outputPath: destination,
       scale,
       srMode,
-      compressionMode: compressionModeFor(effectiveFormat),
-      format: effectiveFormat,
+      compressionMode: useCompact ? "compact" : compressionModeFor(targetFormat),
+      format: targetFormat,
       modelId: modelId || null,
       targetWidth: operation === "crop" || operation === "resize" ? targetWidth : null,
       targetHeight: operation === "crop" || operation === "resize" ? targetHeight : null,
       cropZoom: operation === "crop" ? cropZoom : null,
       cropX: operation === "crop" ? cropX : null,
       cropY: operation === "crop" ? cropY : null,
+      targetBytes: operation === "crop" ? customTargetBytes : null,
     };
     try {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
@@ -524,7 +606,10 @@ export default function App() {
         setJob(next);
       }
       if (next.state === "completed") {
-        setResult(next.result ?? null);
+        if (next.result) {
+          setResult(next.result);
+          setOutputResults((current) => [...current, next.result!]);
+        }
         if (next.result?.outputPath) {
           try {
             const preview = await invoke<string>("preview_image_command", { path: next.result.outputPath });
@@ -533,32 +618,44 @@ export default function App() {
             setOutputPreview("");
           }
         }
-      } else if (next.state === "failed") {
-        setError(next.error?.message ?? "Processing failed");
       }
       return next;
     } catch (cause) {
-      setError(errorText(cause));
       setJobTiming(null);
-      return null;
+      return {
+        jobId: "local-error",
+        state: "failed",
+        fraction: 0,
+        stage: "failed",
+        error: { code: "desktop_request_error", message: errorText(cause) },
+      };
     }
-  }, [cropX, cropY, cropZoom, effectiveFormat, modelId, operation, scale, srMode, targetHeight, targetWidth]);
+  }, [cropX, cropY, cropZoom, customTargetBytes, modelId, operation, scale, srMode, targetHeight, targetWidth]);
 
   const start = async () => {
-    if (running) return;
+    if (running || selectedFormats.length === 0) return;
     setError("");
     setResult(null);
+    setOutputResults([]);
     setOutputPreview("");
 
     if (!multiMode) {
       if (!inputPath || !outputDirectory || !outputName.trim()) return;
-      try {
-        const destination = await resolveDestination(outputName);
-        setOutputPath(destination);
-        await runOne(inputPath, destination);
-      } catch (cause) {
-        setError(errorText(cause));
+      const failures: string[] = [];
+      for (const targetFormat of selectedFormats) {
+        try {
+          const destination = await resolveDestination(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat);
+          setOutputPath(destination);
+          const terminal = await runOne(inputPath, destination, targetFormat);
+          if (terminal?.state === "cancelled") break;
+          if (terminal?.state !== "completed") {
+            failures.push(`${targetFormat.toUpperCase()}: ${terminal?.error?.message ?? "Processing failed"}`);
+          }
+        } catch (cause) {
+          failures.push(`${targetFormat.toUpperCase()}: ${errorText(cause)}`);
+        }
       }
+      if (failures.length > 0) setError(failures.join(" / "));
       return;
     }
 
@@ -567,6 +664,7 @@ export default function App() {
     cancelBatchRef.current = false;
     setBatchRunning(true);
     setQueue((current) => current.map((entry) => ({ ...entry, state: "pending" })));
+    const failures: string[] = [];
 
     for (const path of paths) {
       if (cancelBatchRef.current) break;
@@ -580,29 +678,37 @@ export default function App() {
         )));
         continue;
       }
-      let destination: string;
-      try {
-        destination = await resolveDestination(outputNameFor(path, operation, effectiveFormat, true));
-      } catch (cause) {
-        setError(errorText(cause));
-        setQueue((current) => current.map((entry) => (
-          entry.path === path ? { ...entry, state: "failed" } : entry
-        )));
-        continue;
+
+      let pathState: QueueState = "completed";
+      for (const targetFormat of selectedFormats) {
+        if (cancelBatchRef.current) {
+          pathState = "cancelled";
+          break;
+        }
+        try {
+          const destination = await resolveDestination(outputNameForFormat(outputNameFor(path, operation, targetFormat, true), targetFormat, selectedFormats.length > 1), targetFormat);
+          setOutputPath(destination);
+          const terminal = await runOne(path, destination, targetFormat);
+          if (terminal?.state === "cancelled") {
+            pathState = "cancelled";
+            break;
+          }
+          if (terminal?.state !== "completed") {
+            pathState = "failed";
+            failures.push(`${basename(path)} / ${targetFormat.toUpperCase()}: ${terminal?.error?.message ?? "Processing failed"}`);
+          }
+        } catch (cause) {
+          pathState = "failed";
+          failures.push(`${basename(path)} / ${targetFormat.toUpperCase()}: ${errorText(cause)}`);
+        }
       }
-      setOutputPath(destination);
-      const terminal = await runOne(path, destination);
-      const state: QueueState = terminal?.state === "completed"
-        ? "completed"
-        : terminal?.state === "cancelled"
-          ? "cancelled"
-          : "failed";
       setQueue((current) => current.map((entry) => (
-        entry.path === path ? { ...entry, state } : entry
+        entry.path === path ? { ...entry, state: pathState } : entry
       )));
-      if (terminal?.state === "cancelled" || cancelBatchRef.current) break;
+      if (pathState === "cancelled" || cancelBatchRef.current) break;
     }
     setBatchRunning(false);
+    if (failures.length > 0) setError(failures.join(" / "));
   };
 
   const cancel = async () => {
@@ -643,13 +749,9 @@ export default function App() {
     return (1 - result.outputBytes / result.inputBytes) * 100;
   }, [result]);
 
-  const qualityNote = effectiveFormat === "avif"
-    ? "高品質AVIF Preserve。見た目を維持しますがpixel完全一致ではありません。"
-    : effectiveFormat === "jpeg"
-      ? "高品質JPEG Preserve。互換性優先のlossy出力で、透明度は保持されません。"
-      : effectiveFormat === "jxl"
-        ? "JPEG XL Lossless。復号後pixel hashまで照合します。"
-        : "復号後pixel hashまで照合するExact Lossless。";
+  const qualityNote = operation === "crop" && customTargetBytes != null
+    ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
+    : selectedFormats.map(formatQualityText).join(" · ");
 
   const elapsedMs = jobTiming ? Math.max(0, clock - jobTiming.startedAt) : 0;
   const adaptiveTotalMs = jobTiming
@@ -668,7 +770,9 @@ export default function App() {
     : backendRunning && jobTiming
       ? `残り 約${durationText(Math.max(0, adaptiveTotalMs - elapsedMs))}`
       : "";
-  const visibleOutputName = outputPath ? basename(outputPath) : withExtension(outputName, effectiveFormat);
+  const visibleOutputName = outputResults.length > 0
+    ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
+    : selectedFormats.map((targetFormat) => withExtension(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat)).join(" · ");
 
   const updateCompareFromClientX = useCallback((clientX: number) => {
     const rect = compareStageRef.current?.getBoundingClientRect();
@@ -676,15 +780,6 @@ export default function App() {
     const position = ((clientX - rect.left) / rect.width) * 100;
     setComparePosition(Math.min(96, Math.max(4, position)));
   }, []);
-
-  const resizePreviewDimensions = useMemo(() => {
-    if (!inputInfo || targetWidth <= 0 || targetHeight <= 0) return null;
-    const scaleFactor = Math.min(1, targetWidth / inputInfo.width, targetHeight / inputInfo.height);
-    return {
-      width: Math.max(1, Math.min(targetWidth, Math.round(inputInfo.width * scaleFactor))),
-      height: Math.max(1, Math.min(targetHeight, Math.round(inputInfo.height * scaleFactor))),
-    };
-  }, [inputInfo, targetHeight, targetWidth]);
 
   const cropImageStyle = useMemo(() => {
     if (!inputInfo || !inputPreview || cropFrameSize.width <= 0 || cropFrameSize.height <= 0) return undefined;
@@ -712,6 +807,42 @@ export default function App() {
     setCropZoom(1);
     setCropX(0);
     setCropY(0);
+  };
+
+  const toggleOutputFormat = (targetFormat: OutputFormat) => {
+    if (running) return;
+    setSelectedFormats((current) => {
+      if (current.includes(targetFormat)) {
+        if (current.length === 1) return current;
+        return current.filter((item) => item !== targetFormat);
+      }
+      const chosen = new Set([...current, targetFormat]);
+      return OUTPUT_FORMATS.map((item) => item.id).filter((item) => chosen.has(item));
+    });
+  };
+
+  const saveCurrentPreset = () => {
+    const name = presetName.trim() || `${targetWidth}×${targetHeight}`;
+    const nextPreset: SavedSizePreset = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      width: targetWidth,
+      height: targetHeight,
+    };
+    setSavedSizePresets((current) => {
+      const existing = current.find((item) => item.name.toLocaleLowerCase() === name.toLocaleLowerCase());
+      if (existing) {
+        return current.map((item) => item.id === existing.id
+          ? { ...item, width: targetWidth, height: targetHeight }
+          : item);
+      }
+      return [...current, nextPreset].slice(-40);
+    });
+    setPresetName("");
+  };
+
+  const deleteSavedPreset = (id: string) => {
+    setSavedSizePresets((current) => current.filter((item) => item.id !== id));
   };
 
   const handleCropPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -781,10 +912,10 @@ export default function App() {
       </header>
 
       <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize", "crop", "resize"] as Operation[]).map((item) => (
+        {(["enhance", "compress", "optimize", "crop"] as Operation[]).map((item) => (
           <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
             {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "位置・ズーム指定" : "比率維持で縮小"}</small>
+            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : "サイズ・構図・容量"}</small>
           </button>
         ))}
       </section>
@@ -833,9 +964,9 @@ export default function App() {
             </div>
           )}
 
-          {(operation === "crop" || operation === "resize") && (
+          {operation === "crop" && (
             <>
-              <div className="section-label">TARGET SIZE</div>
+              <div className="section-label">CUSTOM OUTPUT</div>
               <div className="field-row two size-fields">
                 <label>
                   <span>Width · px</span>
@@ -846,63 +977,100 @@ export default function App() {
                   <input type="number" min={1} max={32768} value={targetHeight} onChange={(event) => setTargetHeight(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
                 </label>
               </div>
-              <div className="size-toolbar">
+              <div className="size-toolbar custom-size-toolbar">
                 <button type="button" onClick={() => { setTargetWidth(targetHeight); setTargetHeight(targetWidth); }} disabled={running}>↔ W/H</button>
-                <button type="button" onClick={() => setCropPreset(1024, 1024)} disabled={running}>1024²</button>
-                <button type="button" onClick={() => setCropPreset(1080, 1350)} disabled={running}>1080×1350</button>
-                <button type="button" onClick={() => setCropPreset(1080, 1920)} disabled={running}>1080×1920</button>
-                <button type="button" onClick={() => setCropPreset(1200, 630)} disabled={running}>1200×630</button>
-              </div>
-              {operation === "resize" ? (
-                <div className="transform-note">
-                  <strong>Fit Within · アスペクト比維持</strong>
-                  <span>{resizePreviewDimensions ? `出力予定 ${resizePreviewDimensions.width}×${resizePreviewDimensions.height}px` : "指定枠内へ縮小"}</span>
-                  <span>元画像より大きい指定でも拡大しません。</span>
-                </div>
-              ) : (
-                <div className="crop-controls">
-                  <div className="crop-zoom-head"><span>Zoom</span><strong>{cropZoom.toFixed(2)}×</strong></div>
-                  <div className="crop-zoom-row">
-                    <button type="button" onClick={() => setCropZoom((value) => clamp(value - 0.1, 1, 6))} disabled={running}>−</button>
-                    <input type="range" min={1} max={6} step={0.01} value={cropZoom} onChange={(event) => setCropZoom(Number(event.target.value))} disabled={running} />
-                    <button type="button" onClick={() => setCropZoom((value) => clamp(value + 0.1, 1, 6))} disabled={running}>＋</button>
-                  </div>
-                  <div className="nudge-area">
-                    <span>位置</span>
-                    <div className="nudge-pad">
-                      <button type="button" className="up" onClick={() => adjustCrop(0, -0.04)} disabled={running}>↑</button>
-                      <button type="button" className="left" onClick={() => adjustCrop(-0.04, 0)} disabled={running}>←</button>
-                      <button type="button" className="center" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>●</button>
-                      <button type="button" className="right" onClick={() => adjustCrop(0.04, 0)} disabled={running}>→</button>
-                      <button type="button" className="down" onClick={() => adjustCrop(0, 0.04)} disabled={running}>↓</button>
+                <div
+                  className="preset-menu"
+                  onMouseEnter={() => setPresetMenuOpen(true)}
+                  onMouseLeave={() => setPresetMenuOpen(false)}
+                >
+                  <button type="button" onClick={() => setPresetMenuOpen((value) => !value)} disabled={running}>サイズプリセット ▾</button>
+                  {presetMenuOpen && (
+                    <div className="preset-popover" role="menu">
+                      <span className="preset-heading">BUILT-IN</span>
+                      {[[1024, 1024], [1080, 1350], [1080, 1920], [1200, 630]].map(([width, height]) => (
+                        <button key={`${width}x${height}`} type="button" onClick={() => { setCropPreset(width, height); setPresetMenuOpen(false); }}>
+                          <span>{width}×{height}</span><small>px</small>
+                        </button>
+                      ))}
+                      {savedSizePresets.length > 0 && <span className="preset-heading saved">SAVED</span>}
+                      {savedSizePresets.map((preset) => (
+                        <div className="saved-preset-row" key={preset.id}>
+                          <button type="button" className="saved-preset-apply" onClick={() => { setCropPreset(preset.width, preset.height); setPresetMenuOpen(false); }}>
+                            <span>{preset.name}</span><small>{preset.width}×{preset.height}</small>
+                          </button>
+                          <button type="button" className="saved-preset-delete" aria-label={`${preset.name}を削除`} onClick={(event) => { event.stopPropagation(); deleteSavedPreset(preset.id); }}>×</button>
+                        </div>
+                      ))}
                     </div>
+                  )}
+                </div>
+              </div>
+              <div className="preset-save-row">
+                <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder={`名前（未入力なら ${targetWidth}×${targetHeight}）`} disabled={running} />
+                <button type="button" onClick={saveCurrentPreset} disabled={running}>サイズ保存</button>
+              </div>
+
+              <div className={`size-cap-card ${sizeCapEnabled ? "active" : ""}`}>
+                <label className="size-cap-toggle">
+                  <input type="checkbox" checked={sizeCapEnabled} onChange={(event) => setSizeCapEnabled(event.target.checked)} disabled={running} />
+                  <span>最大ファイルサイズを指定</span>
+                </label>
+                {sizeCapEnabled && (
+                  <div className="size-cap-fields">
+                    <input type="number" min={0.01} step={0.05} value={sizeCapValue} onChange={(event) => setSizeCapValue(Math.max(0.01, Number(event.target.value) || 0.01))} disabled={running} />
+                    <select value={sizeCapUnit} onChange={(event) => setSizeCapUnit(event.target.value as "KB" | "MB")} disabled={running}>
+                      <option value="KB">KB</option>
+                      <option value="MB">MB</option>
+                    </select>
+                    <strong>≤ {bytes(customTargetBytes)}</strong>
                   </div>
-                  <div className="crop-reset-row">
-                    <button type="button" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>位置Reset</button>
-                    <button type="button" onClick={() => setCropZoom(1)} disabled={running}>Zoom Reset</button>
-                    <button type="button" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }} disabled={running}>中央Fit</button>
-                  </div>
-                  <div className="transform-note compact">
-                    <span>プレビューをドラッグ / ホイール / 矢印キーで調整。Shift+矢印は大きく、Option+矢印は細かく移動。</span>
-                    {inputInfo && (inputInfo.width < targetWidth || inputInfo.height < targetHeight) && <span className="size-warning">指定サイズが元画像より大きいため、Crop出力ではLanczos補間が入る場合があります。</span>}
+                )}
+                <p>サイズ上限を優先するため、JPG / WebP / AVIF / JXL は必要に応じて品質を下げます。PNGはExactで達成不能なら明示的に停止します。</p>
+              </div>
+
+              <div className="crop-controls">
+                <div className="crop-zoom-head"><span>Zoom</span><strong>{cropZoom.toFixed(2)}×</strong></div>
+                <div className="crop-zoom-row">
+                  <button type="button" onClick={() => setCropZoom((value) => clamp(value - 0.1, 1, 6))} disabled={running}>−</button>
+                  <input type="range" min={1} max={6} step={0.01} value={cropZoom} onChange={(event) => setCropZoom(Number(event.target.value))} disabled={running} />
+                  <button type="button" onClick={() => setCropZoom((value) => clamp(value + 0.1, 1, 6))} disabled={running}>＋</button>
+                </div>
+                <div className="nudge-area">
+                  <span>位置</span>
+                  <div className="nudge-pad">
+                    <button type="button" className="up" onClick={() => adjustCrop(0, -0.04)} disabled={running}>↑</button>
+                    <button type="button" className="left" onClick={() => adjustCrop(-0.04, 0)} disabled={running}>←</button>
+                    <button type="button" className="center" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>●</button>
+                    <button type="button" className="right" onClick={() => adjustCrop(0.04, 0)} disabled={running}>→</button>
+                    <button type="button" className="down" onClick={() => adjustCrop(0, 0.04)} disabled={running}>↓</button>
                   </div>
                 </div>
-              )}
+                <div className="crop-reset-row">
+                  <button type="button" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>位置Reset</button>
+                  <button type="button" onClick={() => setCropZoom(1)} disabled={running}>Zoom Reset</button>
+                  <button type="button" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }} disabled={running}>中央Fit</button>
+                </div>
+                <div className="transform-note compact">
+                  <span>プレビューをドラッグ / ホイール / 矢印キーで調整。Shift+矢印は大きく、Option+矢印は細かく移動。</span>
+                  {inputInfo && (inputInfo.width < targetWidth || inputInfo.height < targetHeight) && <span className="size-warning">指定サイズが元画像より大きいため、出力ではLanczos補間が入る場合があります。</span>}
+                </div>
+              </div>
             </>
           )}
 
           {(operation === "enhance" || operation === "optimize") && (
             <>
               <div className="section-label">SUPER RESOLUTION</div>
-              <div className="field-row two">
-                <label>
-                  <span>Scale</span>
+              <div className="field-row two sr-mode-row">
+                <div className="field-control">
+                  <div className="field-title"><span>Scale</span></div>
                   <select value={scale} onChange={(event) => setScale(Number(event.target.value) as 1 | 2 | 4)} disabled={running}>
                     <option value={1}>1× · 解像度維持</option>
                     <option value={2}>2× · 推奨確認</option>
                     <option value={4}>4× · 最大拡大</option>
                   </select>
-                </label>
+                </div>
                 <div className="field-control">
                   <div className="field-title">
                     <span>Mode</span>
@@ -926,7 +1094,7 @@ export default function App() {
                 </div>
               </div>
               {scale === 1 && <div className="scale-note">1×ではSR child processを起動せず、寸法を完全維持して変換 / 圧縮のみ行います。</div>}
-              <div className="field-control field">
+              <div className="field-control field sr-model-field">
                 <div className="field-title">
                   <span>Model</span>
                   <InfoHint title="Model · 学習済みSRモデルの選び方">
@@ -950,22 +1118,26 @@ export default function App() {
             </>
           )}
 
-          {operation !== "enhance" && (
-            <>
-              <div className="section-label">COMPRESSION / CONVERT</div>
-              <label className="field">
-                <span>Output format</span>
-                <select value={format} onChange={(event) => setFormat(event.target.value as OutputFormat)} disabled={running}>
-                  <option value="png">PNG · Exact</option>
-                  <option value="webp">WebP · Lossless</option>
-                  <option value="avif">AVIF · Preserve</option>
-                  <option value="jpeg">JPEG · High Quality</option>
-                  <option value="jxl">JXL · Lossless</option>
-                </select>
-              </label>
-              <div className="quality-note">{qualityNote}</div>
-            </>
-          )}
+          <div className="section-label">OUTPUT FORMATS</div>
+          <div className="format-selector" role="group" aria-label="出力形式を複数選択">
+            {OUTPUT_FORMATS.map((item) => {
+              const active = selectedFormats.includes(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={active ? "active" : ""}
+                  aria-pressed={active}
+                  onClick={() => toggleOutputFormat(item.id)}
+                  disabled={running}
+                >
+                  <strong>{item.label}</strong>
+                  <small>{item.detail}</small>
+                </button>
+              );
+            })}
+          </div>
+          <div className="quality-note">{qualityNote}</div>
 
           <div className="section-label">OUTPUT</div>
           <div className="output-folder-row">
@@ -986,9 +1158,14 @@ export default function App() {
           </label>
           <div className="output-preview-line">
             <span>最終名</span>
-            <code>{multiMode ? `各入力名 → ${effectiveFormat} / 衝突時 _02, _03…` : visibleOutputName}</code>
+            <code>{multiMode ? `各入力名 → ${selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
           </div>
           {outputPath && <div className="resolved-output" title={outputPath}>保存先: {outputPath}</div>}
+          {outputResults.length > 1 && (
+            <div className="output-results-list">
+              {outputResults.map((entry) => <span key={entry.outputPath}>{basename(entry.outputPath)} · {bytes(entry.outputBytes)}</span>)}
+            </div>
+          )}
 
           {job && (
             <div className={`job-card ${job.state}`}>
@@ -997,15 +1174,15 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "crop" ? `${targetWidth}×${targetHeight}` : operation === "resize" ? `≤ ${targetWidth}×${targetHeight}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? "SR skip" : operation === "compress" ? effectiveFormat.toUpperCase() : `${scale}×`}</span></div>
+              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
           {error && <div className="error-box">{error}</div>}
 
           <div className="action-row">
-            <button className="primary" onClick={start} disabled={running || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : multiMode ? `${modeLabel(operation)} ${queue.length} images` : `${modeLabel(operation)} image`}
+            <button className="primary" onClick={start} disabled={running || selectedFormats.length === 0 || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
+              {running ? "Processing…" : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>
@@ -1015,7 +1192,7 @@ export default function App() {
           {operation === "crop" ? (
             <figure className="crop-card">
               <figcaption>
-                <div><span className="before-label">CROP FRAME</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div><span className="before-label">CUSTOM FRAME</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
                 <div className="crop-caption-center">{targetWidth}×{targetHeight}px · {cropZoom.toFixed(2)}×</div>
                 <div><span className="after-label">OUTPUT</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}</div>
               </figcaption>
@@ -1026,7 +1203,7 @@ export default function App() {
                   style={{ aspectRatio: `${targetWidth} / ${targetHeight}` }}
                   tabIndex={0}
                   role="application"
-                  aria-label="Crop preview. Drag, wheel, or arrow keys to adjust."
+                  aria-label="Ultra custom preview. Drag, wheel, or arrow keys to adjust."
                   onPointerDown={handleCropPointerDown}
                   onPointerMove={handleCropPointerMove}
                   onPointerUp={endCropDrag}
