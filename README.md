@@ -83,17 +83,17 @@ Primary Desktop functions:
 
 - window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
 - single-image replace mode or multi-image queue mode with sequential batch processing
-- Before / After preview
-- Enhance / Compress / Optimize / **超カスタム**
+- Before / After preview with per-format switching when multiple output formats are produced
+- Enhance / Compress / Optimize / **Custom**
 - x1 / x2 / x4
-- 超カスタム with target-pixel framing, drag / wheel / keyboard / nudge controls
+- Custom with target-pixel framing, drag / wheel / keyboard / nudge controls
 - one-click source-size matching plus source-relative 1× / 2× / 4× and editable multiplier sizing
 - reusable custom-size presets with local persistence, hover/dropdown selection, and deletion
-- optional maximum output file-size cap for 超カスタム; lossy formats reduce quality as needed, while PNG fails explicitly when Exact output cannot meet the requested cap
-- multi-format output: choose multiple final formats in one run across Enhance / Compress / Optimize / 超カスタム
+- optional maximum output file-size cap for Custom; lossy formats reduce quality as needed, while PNG fails explicitly when Exact output cannot meet the requested cap
+- multi-format output: choose multiple final formats in one run across Enhance / Compress / Optimize / Custom
 - Enhance uses lossless PNG internally where appropriate but is no longer restricted to PNG as the final format
 - Mode / Model selection with contextual hover guidance and aligned Scale / Mode / Model controls
-- PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality, plus target-size Compact encoding in 超カスタム
+- PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality, plus target-size Compact encoding in Custom
 - cross-format conversion through the shared Rust Core
 - single-image output location selection or automatic per-input batch output
 - asynchronous jobs

@@ -33,6 +33,12 @@ interface SavedSizePreset {
   height: number;
 }
 
+interface FormatComparisonOutput {
+  format: OutputFormat;
+  result: Agent2DResult;
+  preview: string;
+}
+
 const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
 const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Exact" },
@@ -295,7 +301,7 @@ function stageLabel(stage?: string): string {
     case "compression": return "圧縮 / 変換";
     case "conversion_only": return "解像度維持 / 変換";
     case "compression_conversion_only": return "解像度維持 / 圧縮・変換";
-    case "crop_to_size": return "超カスタム書き出し";
+    case "crop_to_size": return "Custom書き出し";
     case "resize_to_size": return "指定サイズへ縮小";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
@@ -324,7 +330,7 @@ function errorText(error: unknown): string {
 function modeLabel(mode: Operation): string {
   if (mode === "enhance") return "Enhance";
   if (mode === "compress") return "Compress";
-  if (mode === "crop") return "超カスタム";
+  if (mode === "crop") return "Custom";
   if (mode === "resize") return "Resize to Size";
   return "Optimize";
 }
@@ -361,6 +367,8 @@ export default function App() {
   const [outputPreview, setOutputPreview] = useState("");
   const [result, setResult] = useState<Agent2DResult | null>(null);
   const [outputResults, setOutputResults] = useState<Agent2DResult[]>([]);
+  const [comparisonOutputs, setComparisonOutputs] = useState<FormatComparisonOutput[]>([]);
+  const [comparisonFormat, setComparisonFormat] = useState<OutputFormat>("png");
   const [scale, setScale] = useState<1 | 2 | 4>(2);
   const [srMode, setSrMode] = useState<SrMode>("balanced");
   const [selectedFormats, setSelectedFormats] = useState<OutputFormat[]>(["png"]);
@@ -399,6 +407,9 @@ export default function App() {
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
   const effectiveFormat: OutputFormat = selectedFormats[0] ?? "png";
+  const activeComparison = comparisonOutputs.find((entry) => entry.format === comparisonFormat) ?? comparisonOutputs[0] ?? null;
+  const displayResult = operation === "crop" ? result : activeComparison?.result ?? result;
+  const displayOutputPreview = activeComparison?.preview ?? outputPreview;
   const customTargetBytes = operation === "crop" && sizeCapEnabled
     ? targetBytesFrom(sizeCapValue, sizeCapUnit)
     : null;
@@ -410,6 +421,8 @@ export default function App() {
     setError("");
     setResult(null);
     setOutputResults([]);
+    setComparisonOutputs([]);
+    setComparisonFormat(effectiveFormat);
     setOutputPreview("");
     try {
       const [info, preview] = await Promise.all([
@@ -512,6 +525,8 @@ export default function App() {
       setOutputPath("");
       setResult(null);
       setOutputResults([]);
+      setComparisonOutputs([]);
+      setComparisonFormat(effectiveFormat);
       setOutputPreview("");
       setComparePosition(50);
     }
@@ -613,11 +628,19 @@ export default function App() {
           setOutputResults((current) => [...current, next.result!]);
         }
         if (next.result?.outputPath) {
+          let preview = "";
           try {
-            const preview = await invoke<string>("preview_image_command", { path: next.result.outputPath });
+            preview = await invoke<string>("preview_image_command", { path: next.result.outputPath });
             setOutputPreview(preview);
           } catch {
             setOutputPreview("");
+          }
+          if (next.result) {
+            const comparisonEntry: FormatComparisonOutput = { format: targetFormat, result: next.result, preview };
+            setComparisonOutputs((current) => [
+              ...current.filter((entry) => entry.format !== targetFormat),
+              comparisonEntry,
+            ]);
           }
         }
       }
@@ -639,6 +662,8 @@ export default function App() {
     setError("");
     setResult(null);
     setOutputResults([]);
+    setComparisonOutputs([]);
+    setComparisonFormat(selectedFormats[0] ?? "png");
     setOutputPreview("");
 
     if (!multiMode) {
@@ -747,9 +772,9 @@ export default function App() {
   };
 
   const savings = useMemo(() => {
-    if (!result || result.inputBytes <= 0) return null;
-    return (1 - result.outputBytes / result.inputBytes) * 100;
-  }, [result]);
+    if (!displayResult || displayResult.inputBytes <= 0) return null;
+    return (1 - displayResult.outputBytes / displayResult.inputBytes) * 100;
+  }, [displayResult]);
 
   const qualityNote = operation === "crop" && customTargetBytes != null
     ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
@@ -906,27 +931,14 @@ export default function App() {
         </div>
       )}
 
-      <header className="topbar">
-        <div>
-          <div className="eyebrow">LOCAL IMAGE ENGINE</div>
-          <h1>Agent-2D</h1>
+      {runtimeChecked && !capabilities && (
+        <div className="runtime-alert">
+          <span>Real-ESRGAN runtime未導入</span>
+          <button className="runtime-install" onClick={installManagedRuntime} disabled={installingRuntime}>
+            {installingRuntime ? "Installing…" : "Install runtime"}
+          </button>
         </div>
-        <div className={`runtime-pill ${runtimeChecked && !capabilities ? "missing" : ""}`}>
-          <span className={`runtime-dot ${capabilities ? "online" : ""}`} />
-          <span>
-            {capabilities
-              ? `${capabilities.models.length} models · ${capabilities.backend}`
-              : runtimeChecked
-                ? "Real-ESRGAN runtime not installed"
-                : "runtime checking"}
-          </span>
-          {runtimeChecked && !capabilities && (
-            <button className="runtime-install" onClick={installManagedRuntime} disabled={installingRuntime}>
-              {installingRuntime ? "Installing…" : "Install runtime"}
-            </button>
-          )}
-        </div>
-      </header>
+      )}
 
       <section className="mode-tabs" aria-label="Operation">
         {(["enhance", "compress", "optimize", "crop"] as Operation[]).map((item) => (
@@ -1314,29 +1326,46 @@ export default function App() {
             <figcaption>
               <div><span className="before-label">BEFORE</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
               <div className="compare-help">← Afterを広く · drag · Beforeを広く →</div>
-              <div><span className="after-label">AFTER</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}</div>
+              <div><span className="after-label">AFTER</span>{displayResult && <b>{displayResult.outputWidth}×{displayResult.outputHeight}</b>}</div>
             </figcaption>
+            {comparisonOutputs.length > 1 && (
+              <div className="compare-format-tabs" role="tablist" aria-label="Before / After 出力形式">
+                {comparisonOutputs.map((entry) => (
+                  <button
+                    key={entry.format}
+                    type="button"
+                    role="tab"
+                    aria-selected={comparisonFormat === entry.format}
+                    className={comparisonFormat === entry.format ? "active" : ""}
+                    onClick={() => setComparisonFormat(entry.format)}
+                  >
+                    <strong>{entry.format === "jpeg" ? "JPG" : entry.format.toUpperCase()}</strong>
+                    <small>{bytes(entry.result.outputBytes)}</small>
+                  </button>
+                ))}
+              </div>
+            )}
             <div
               ref={compareStageRef}
-              className={`comparison-stage ${outputPreview ? "ready" : ""}`}
+              className={`comparison-stage ${displayOutputPreview ? "ready" : ""}`}
               onPointerDown={(event) => {
-                if (!outputPreview) return;
+                if (!displayOutputPreview) return;
                 event.currentTarget.setPointerCapture(event.pointerId);
                 updateCompareFromClientX(event.clientX);
               }}
               onPointerMove={(event) => {
-                if (outputPreview && event.currentTarget.hasPointerCapture(event.pointerId)) updateCompareFromClientX(event.clientX);
+                if (displayOutputPreview && event.currentTarget.hasPointerCapture(event.pointerId)) updateCompareFromClientX(event.clientX);
               }}
             >
               {inputPreview ? (
                 <>
                   <img className="compare-image before-image" src={inputPreview} alt="Before" />
-                  {outputPreview && (
+                  {displayOutputPreview && (
                     <div className="after-layer" style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}>
-                      <img className="compare-image after-image" src={outputPreview} alt="After" />
+                      <img className="compare-image after-image" src={displayOutputPreview} alt={`After ${comparisonFormat.toUpperCase()}`} />
                     </div>
                   )}
-                  {outputPreview && (
+                  {displayOutputPreview && (
                     <button
                       type="button"
                       className="compare-handle"
@@ -1365,7 +1394,7 @@ export default function App() {
                       <span>‹</span><i /><span>›</span>
                     </button>
                   )}
-                  {!outputPreview && <div className="result-waiting">処理後、ここで重ね比較できます</div>}
+                  {!displayOutputPreview && <div className="result-waiting">処理後、ここで重ね比較できます</div>}
                 </>
               ) : <div className="empty-preview">Drop an image anywhere</div>}
             </div>
@@ -1373,15 +1402,15 @@ export default function App() {
           )}
 
           <div className="result-strip">
-            <div><span>INPUT</span><strong>{bytes(result?.inputBytes ?? inputInfo?.inputBytes)}</strong></div>
-            <div><span>OUTPUT</span><strong>{bytes(result?.outputBytes)}</strong></div>
+            <div><span>INPUT</span><strong>{bytes(displayResult?.inputBytes ?? inputInfo?.inputBytes)}</strong></div>
+            <div><span>OUTPUT</span><strong>{bytes(displayResult?.outputBytes)}</strong></div>
             <div><span>SIZE CHANGE</span><strong>{savings == null ? "—" : `${savings >= 0 ? "−" : "+"}${Math.abs(savings).toFixed(1)}%`}</strong></div>
-            <div><span>TIME</span><strong>{result ? `${(result.elapsedMs / 1000).toFixed(2)}s` : "—"}</strong></div>
-            <div><span>VERIFY</span><strong>{result?.pixelExact === true ? "PIXEL EXACT" : result ? "PASS" : "—"}</strong></div>
+            <div><span>TIME</span><strong>{displayResult ? `${(displayResult.elapsedMs / 1000).toFixed(2)}s` : "—"}</strong></div>
+            <div><span>VERIFY</span><strong>{displayResult?.pixelExact === true ? "PIXEL EXACT" : displayResult ? "PASS" : "—"}</strong></div>
           </div>
 
-          {result?.warnings?.length ? (
-            <div className="warning-row">{result.warnings.map((warning) => <span key={warning}>{warning.replaceAll("_", " ")}</span>)}</div>
+          {displayResult?.warnings?.length ? (
+            <div className="warning-row">{displayResult.warnings.map((warning) => <span key={warning}>{warning.replaceAll("_", " ")}</span>)}</div>
           ) : null}
         </section>
       </section>
