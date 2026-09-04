@@ -87,6 +87,7 @@ Primary Desktop functions:
 - Enhance / Compress / Optimize / **超カスタム**
 - x1 / x2 / x4
 - 超カスタム with target-pixel framing, drag / wheel / keyboard / nudge controls
+- one-click source-size matching plus source-relative 1× / 2× / 4× and editable multiplier sizing
 - reusable custom-size presets with local persistence, hover/dropdown selection, and deletion
 - optional maximum output file-size cap for 超カスタム; lossy formats reduce quality as needed, while PNG fails explicitly when Exact output cannot meet the requested cap
 - multi-format output: choose multiple final formats in one run across Enhance / Compress / Optimize / 超カスタム

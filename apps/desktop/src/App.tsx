@@ -379,6 +379,7 @@ export default function App() {
   const [jobTiming, setJobTiming] = useState<{ startedAt: number; estimatedMs: number } | null>(null);
   const [targetWidth, setTargetWidth] = useState(1024);
   const [targetHeight, setTargetHeight] = useState(1024);
+  const [sourceSizeMultiplier, setSourceSizeMultiplier] = useState(1);
   const [cropZoom, setCropZoom] = useState(1);
   const [cropX, setCropX] = useState(0);
   const [cropY, setCropY] = useState(0);
@@ -422,6 +423,7 @@ export default function App() {
       setOutputName(outputNameFor(path, operation, effectiveFormat));
       setOutputPath("");
       setComparePosition(50);
+      setSourceSizeMultiplier(1);
       setCropZoom(1);
       setCropX(0);
       setCropY(0);
@@ -809,6 +811,21 @@ export default function App() {
     setCropY(0);
   };
 
+  const maxSourceSizeMultiplier = inputInfo
+    ? Math.max(0.1, Math.min(16, 32768 / inputInfo.width, 32768 / inputInfo.height))
+    : 16;
+
+  const applySourceSizeMultiplier = useCallback((requestedMultiplier: number) => {
+    if (!inputInfo) return;
+    const multiplier = clamp(Number.isFinite(requestedMultiplier) ? requestedMultiplier : 1, 0.1, maxSourceSizeMultiplier);
+    setSourceSizeMultiplier(Number(multiplier.toFixed(2)));
+    setTargetWidth(clamp(Math.round(inputInfo.width * multiplier), 1, 32768));
+    setTargetHeight(clamp(Math.round(inputInfo.height * multiplier), 1, 32768));
+    setCropZoom(1);
+    setCropX(0);
+    setCropY(0);
+  }, [inputInfo, maxSourceSizeMultiplier]);
+
   const toggleOutputFormat = (targetFormat: OutputFormat) => {
     if (running) return;
     setSelectedFormats((current) => {
@@ -976,6 +993,59 @@ export default function App() {
                   <span>Height · px</span>
                   <input type="number" min={1} max={32768} value={targetHeight} onChange={(event) => setTargetHeight(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
                 </label>
+              </div>
+              <div className="source-size-tools">
+                <button
+                  type="button"
+                  className="source-size-button"
+                  onClick={() => applySourceSizeMultiplier(1)}
+                  disabled={running || !inputInfo}
+                >
+                  元画像と同じ {inputInfo ? `${inputInfo.width}×${inputInfo.height}` : ""}
+                </button>
+                <div className="source-multiplier-tools" aria-label="元画像サイズ倍率">
+                  <span>元画像倍率</span>
+                  {[1, 2, 4].map((multiplier) => (
+                    <button
+                      key={multiplier}
+                      type="button"
+                      className={inputInfo
+                        && targetWidth === Math.round(inputInfo.width * multiplier)
+                        && targetHeight === Math.round(inputInfo.height * multiplier)
+                        ? "active"
+                        : ""}
+                      onClick={() => applySourceSizeMultiplier(multiplier)}
+                      disabled={running || !inputInfo || multiplier > maxSourceSizeMultiplier}
+                    >
+                      {multiplier}×
+                    </button>
+                  ))}
+                  <label className="source-multiplier-input">
+                    <input
+                      type="number"
+                      min={0.1}
+                      max={Number(maxSourceSizeMultiplier.toFixed(2))}
+                      step={0.1}
+                      value={sourceSizeMultiplier}
+                      onChange={(event) => setSourceSizeMultiplier(clamp(Number(event.target.value) || 0.1, 0.1, maxSourceSizeMultiplier))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          applySourceSizeMultiplier(sourceSizeMultiplier);
+                        }
+                      }}
+                      disabled={running || !inputInfo}
+                      aria-label="元画像サイズ倍率"
+                    />
+                    <span>×</span>
+                  </label>
+                  <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>適用</button>
+                </div>
+                {inputInfo && (
+                  <small className="source-size-preview">
+                    {sourceSizeMultiplier.toFixed(sourceSizeMultiplier % 1 === 0 ? 0 : 1)}× → {Math.round(inputInfo.width * sourceSizeMultiplier)}×{Math.round(inputInfo.height * sourceSizeMultiplier)} px
+                  </small>
+                )}
               </div>
               <div className="size-toolbar custom-size-toolbar">
                 <button type="button" onClick={() => { setTargetWidth(targetHeight); setTargetHeight(targetWidth); }} disabled={running}>↔ W/H</button>
