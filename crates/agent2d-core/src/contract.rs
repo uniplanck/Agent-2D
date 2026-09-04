@@ -180,6 +180,19 @@ pub struct CompressionOptions {
     pub target_bytes: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomRequest {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub target_width: u32,
+    pub target_height: u32,
+    pub zoom: f64,
+    pub offset_x: f64,
+    pub offset_y: f64,
+    pub compression: CompressionOptions,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizeRequest {

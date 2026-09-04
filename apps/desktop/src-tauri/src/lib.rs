@@ -11,11 +11,11 @@ use std::{
 use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
-    CompressionOptions, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
+    CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
     OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale,
     cleanup_output, inspect_image, validate_output_path,
 };
-use agent2d_pipeline::optimize_image_with_cancel;
+use agent2d_pipeline::{custom_image_with_cancel, optimize_image_with_cancel};
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -370,7 +370,33 @@ fn execute_job(
             },
             cancellation,
         ),
-        DesktopOperation::Crop => transform_then_compress(request, cancellation, true, format, compression_mode),
+        DesktopOperation::Crop => {
+            let target_width = request.target_width.filter(|value| *value > 0).ok_or_else(|| Agent2DError::UnsupportedCompression {
+                mode: "custom".into(),
+                format: "target_width_required".into(),
+            })?;
+            let target_height = request.target_height.filter(|value| *value > 0).ok_or_else(|| Agent2DError::UnsupportedCompression {
+                mode: "custom".into(),
+                format: "target_height_required".into(),
+            })?;
+            custom_image_with_cancel(
+                &CustomRequest {
+                    input_path,
+                    output_path,
+                    target_width,
+                    target_height,
+                    zoom: request.crop_zoom.unwrap_or(1.0),
+                    offset_x: request.crop_x.unwrap_or(0.0),
+                    offset_y: request.crop_y.unwrap_or(0.0),
+                    compression: CompressionOptions {
+                        mode: compression_mode,
+                        format: Some(format),
+                        target_bytes: request.target_bytes,
+                    },
+                },
+                cancellation,
+            )
+        },
         DesktopOperation::Resize => transform_then_compress(request, cancellation, false, format, compression_mode),
     }
 }

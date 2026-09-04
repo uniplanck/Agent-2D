@@ -51,6 +51,18 @@ cargo run -p agent2d-cli -- capabilities
 
 The Desktop app also exposes an explicit **Install runtime** action when the managed runtime is absent. Network access is therefore limited to an explicit runtime installation action; normal image processing stays local.
 
+CLI Custom parity is available through numeric parameters. `--source-scale` derives the target dimensions from the input while `--width` + `--height` selects an exact frame. Multiple formats use tagged sibling outputs such as `output-png.png` / `output-jpg.jpg`.
+
+```bash
+# exact custom frame
+cargo run -p agent2d-cli -- custom input.png output.png --width 1080 --height 1350 --zoom 1.2 --x -0.1 --y 0.15 --formats png,jpeg
+
+# source-relative 2× with a 1 MiB maximum per output
+cargo run -p agent2d-cli -- custom input.png output.png --source-scale 2 --formats jpeg,webp --max-bytes 1048576
+```
+
+`enhance`, `compress`, and `optimize` accept legacy `--format <one>` or App-style `--formats png,jpeg,...` multi-output selection. `compress` and `optimize` also expose `--target-bytes`; when no explicit compression mode is supplied, the CLI chooses the same safe format-oriented default used by the Desktop flow, and a target byte limit selects Compact encoding.
+
 Environment overrides remain available for development/testing and must be supplied as a pair:
 
 ```text
@@ -122,9 +134,13 @@ Current tools:
 agent2d_inspect
 agent2d_compress
 agent2d_upscale
+agent2d_enhance
+agent2d_custom
 agent2d_optimize
 agent2d_capabilities
 ```
+
+`agent2d_custom` mirrors Desktop Custom through AI-friendly numeric arguments: `targetWidth`, `targetHeight` or `sourceScale`, `zoom`, normalized `x` / `y` offsets, `formats[]`, and optional `maxBytes`. `agent2d_enhance`, `agent2d_compress`, and `agent2d_optimize` accept either legacy `format` or multi-output `formats[]`; existing single-format MCP calls remain valid. Compress/Optimize also accept `targetBytes`, while Enhance accepts `targetBytes` for a capped final encode.
 
 ## Validation
 

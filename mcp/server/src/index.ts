@@ -32,6 +32,13 @@ const outputFormatProperty = {
   type: "string",
   enum: ["png", "jpeg", "webp", "avif", "jxl"],
 } as const;
+const outputFormatsProperty = {
+  type: "array",
+  items: outputFormatProperty,
+  minItems: 1,
+  maxItems: 5,
+  uniqueItems: true,
+} as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -65,6 +72,25 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "agent2d_enhance",
+      description: "Enhance with Agent-2D and choose one or more final output formats. scale=1 preserves dimensions while still applying final conversion/compression.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          scale: scaleProperty,
+          mode: srModeProperty,
+          modelId: { type: "string", minLength: 1 },
+          format: outputFormatProperty,
+          formats: outputFormatsProperty,
+          targetBytes: { type: "integer", minimum: 1 },
+        },
+        required: ["inputPath", "outputPath"],
+        additionalProperties: false,
+      },
+    },
+    {
       name: "agent2d_compress",
       description: "Compress a local image using exact or preserve-oriented Agent-2D codecs.",
       inputSchema: {
@@ -74,8 +100,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: pathProperty,
           mode: compressionModeProperty,
           format: outputFormatProperty,
+          formats: outputFormatsProperty,
+          targetBytes: { type: "integer", minimum: 1 },
         },
-        required: ["inputPath", "outputPath", "format"],
+        required: ["inputPath", "outputPath"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "agent2d_custom",
+      description: "Run Agent-2D Custom framing from numeric parameters. Supports exact target size, zoom/position, source-relative sizing, multiple final formats, and an optional maximum output byte target.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          targetWidth: { type: "integer", minimum: 1, maximum: 32768 },
+          targetHeight: { type: "integer", minimum: 1, maximum: 32768 },
+          sourceScale: { type: "number", exclusiveMinimum: 0, maximum: 16 },
+          zoom: { type: "number", minimum: 1, maximum: 6 },
+          x: { type: "number", minimum: -1, maximum: 1 },
+          y: { type: "number", minimum: -1, maximum: 1 },
+          formats: outputFormatsProperty,
+          maxBytes: { type: "integer", minimum: 1 },
+        },
+        required: ["inputPath", "outputPath", "formats"],
         additionalProperties: false,
       },
     },
@@ -92,8 +141,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           modelId: { type: "string", minLength: 1 },
           compressionMode: compressionModeProperty,
           format: outputFormatProperty,
+          formats: outputFormatsProperty,
           targetWidth: { type: "integer", minimum: 1 },
           targetHeight: { type: "integer", minimum: 1 },
+          targetBytes: { type: "integer", minimum: 1 },
         },
         required: ["inputPath", "outputPath"],
         additionalProperties: false,
@@ -122,8 +173,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "agent2d_upscale":
         result = await runAgent2d(buildUpscaleArgs(args));
         break;
+      case "agent2d_enhance":
+        result = await runAgent2d(buildEnhanceArgs(args));
+        break;
       case "agent2d_compress":
         result = await runAgent2d(buildCompressArgs(args));
+        break;
+      case "agent2d_custom":
+        result = await runAgent2d(buildCustomArgs(args));
         break;
       case "agent2d_optimize":
         result = await runAgent2d(buildOptimizeArgs(args));
@@ -161,16 +218,52 @@ function buildUpscaleArgs(args: Record<string, unknown>): string[] {
   return command;
 }
 
+function buildEnhanceArgs(args: Record<string, unknown>): string[] {
+  const command = [
+    "enhance",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+    "--scale",
+    String(optionalScale(args, "scale", 2)),
+    "--mode",
+    optionalEnum(args, "mode", ["fidelity", "balanced", "perceptual"], "balanced"),
+  ];
+  appendString(command, "--model", args.modelId);
+  appendOutputSelection(command, args);
+  appendNumber(command, "--target-bytes", args.targetBytes);
+  return command;
+}
+
 function buildCompressArgs(args: Record<string, unknown>): string[] {
-  return [
+  const command = [
     "compress",
     requiredString(args, "inputPath"),
     requiredString(args, "outputPath"),
-    "--mode",
-    optionalEnum(args, "mode", ["exact", "preserve", "compact"], "exact"),
-    "--format",
-    requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"]),
   ];
+  if (args.mode !== undefined) {
+    command.push("--mode", requiredEnum(args, "mode", ["exact", "preserve", "compact"]));
+  }
+  appendOutputSelection(command, args);
+  appendNumber(command, "--target-bytes", args.targetBytes);
+  return command;
+}
+
+function buildCustomArgs(args: Record<string, unknown>): string[] {
+  const command = [
+    "custom",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+  ];
+  appendNumber(command, "--width", args.targetWidth);
+  appendNumber(command, "--height", args.targetHeight);
+  appendFiniteNumber(command, "--source-scale", args.sourceScale);
+  appendFiniteNumber(command, "--zoom", args.zoom);
+  appendFiniteNumber(command, "--x", args.x);
+  appendFiniteNumber(command, "--y", args.y);
+  const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
+  command.push("--formats", formats.join(","));
+  appendNumber(command, "--max-bytes", args.maxBytes);
+  return command;
 }
 
 function buildOptimizeArgs(args: Record<string, unknown>): string[] {
@@ -182,15 +275,27 @@ function buildOptimizeArgs(args: Record<string, unknown>): string[] {
     String(optionalScale(args, "scale", 2)),
     "--sr-mode",
     optionalEnum(args, "srMode", ["fidelity", "balanced", "perceptual"], "balanced"),
-    "--compression-mode",
-    optionalEnum(args, "compressionMode", ["exact", "preserve", "compact"], "exact"),
-    "--format",
-    optionalEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"], "png"),
   ];
+  if (args.compressionMode !== undefined) {
+    command.push("--compression-mode", requiredEnum(args, "compressionMode", ["exact", "preserve", "compact"]));
+  }
+  appendOutputSelection(command, args);
   appendString(command, "--model", args.modelId);
   appendNumber(command, "--target-width", args.targetWidth);
   appendNumber(command, "--target-height", args.targetHeight);
+  appendNumber(command, "--target-bytes", args.targetBytes);
   return command;
+}
+
+function appendOutputSelection(command: string[], args: Record<string, unknown>): void {
+  if (args.formats !== undefined) {
+    const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
+    command.push("--formats", formats.join(","));
+    return;
+  }
+  if (args.format !== undefined) {
+    command.push("--format", requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"]));
+  }
 }
 
 function runAgent2d(args: string[]): Promise<unknown> {
@@ -277,6 +382,10 @@ function appendNumber(command: string[], flag: string, value: unknown): void {
   }
 }
 
+function appendFiniteNumber(command: string[], flag: string, value: unknown): void {
+  if (typeof value === "number" && Number.isFinite(value)) command.push(flag, String(value));
+}
+
 function optionalScale(args: Record<string, unknown>, key: string, fallback: number): number {
   const value = args[key];
   if (value === undefined) return fallback;
@@ -288,6 +397,16 @@ function requiredEnum(args: Record<string, unknown>, key: string, allowed: reado
   const value = requiredString(args, key);
   if (!allowed.includes(value)) throw new Error(`${key} must be one of ${allowed.join(", ")}`);
   return value;
+}
+
+function requiredEnumArray(args: Record<string, unknown>, key: string, allowed: readonly string[]): string[] {
+  const value = args[key];
+  if (!Array.isArray(value) || value.length === 0) throw new Error(`${key} must be a non-empty array`);
+  const result = value.map((item) => {
+    if (typeof item !== "string" || !allowed.includes(item)) throw new Error(`${key} must contain only ${allowed.join(", ")}`);
+    return item;
+  });
+  return [...new Set(result)];
 }
 
 function optionalEnum(

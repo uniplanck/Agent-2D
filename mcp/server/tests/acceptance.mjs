@@ -28,7 +28,9 @@ try {
   const expected = new Set([
     "agent2d_inspect",
     "agent2d_upscale",
+    "agent2d_enhance",
     "agent2d_compress",
+    "agent2d_custom",
     "agent2d_optimize",
     "agent2d_capabilities",
   ]);
@@ -117,6 +119,88 @@ try {
   }
   if (x1Envelope.data?.modelId != null) throw new Error("x1 unexpectedly ran an SR model");
 
+  const enhanceBase = join(temp, "enhance.png");
+  const enhance = await client.callTool({
+    name: "agent2d_enhance",
+    arguments: {
+      inputPath: input,
+      outputPath: enhanceBase,
+      scale: 1,
+      mode: "balanced",
+      formats: ["png", "jpeg"],
+    },
+  });
+  const enhanceEnvelope = parseTextResult(enhance);
+  assertSuccess(enhanceEnvelope, "enhance-multi");
+  if (!Array.isArray(enhanceEnvelope.data?.results) || enhanceEnvelope.data.results.length !== 2) {
+    throw new Error(`unexpected enhance multi-format result ${JSON.stringify(enhanceEnvelope.data)}`);
+  }
+  for (const entry of enhanceEnvelope.data.results) {
+    if (entry.outputWidth !== 4 || entry.outputHeight !== 3 || entry.modelId != null) {
+      throw new Error(`enhance x1 parity failed ${JSON.stringify(entry)}`);
+    }
+  }
+
+  const compressMultiBase = join(temp, "compress-multi.png");
+  const compressMulti = await client.callTool({
+    name: "agent2d_compress",
+    arguments: {
+      inputPath: input,
+      outputPath: compressMultiBase,
+      formats: ["png", "jpeg"],
+    },
+  });
+  const compressMultiEnvelope = parseTextResult(compressMulti);
+  assertSuccess(compressMultiEnvelope, "compress-multi");
+  if (!Array.isArray(compressMultiEnvelope.data?.results) || compressMultiEnvelope.data.results.length !== 2) {
+    throw new Error(`unexpected compress multi-format result ${JSON.stringify(compressMultiEnvelope.data)}`);
+  }
+
+  const customBase = join(temp, "custom.png");
+  const custom = await client.callTool({
+    name: "agent2d_custom",
+    arguments: {
+      inputPath: input,
+      outputPath: customBase,
+      sourceScale: 2,
+      zoom: 1,
+      x: 0,
+      y: 0,
+      formats: ["png", "jpeg"],
+    },
+  });
+  const customEnvelope = parseTextResult(custom);
+  assertSuccess(customEnvelope, "custom");
+  if (!Array.isArray(customEnvelope.data?.results) || customEnvelope.data.results.length !== 2) {
+    throw new Error(`unexpected custom multi-format result ${JSON.stringify(customEnvelope.data)}`);
+  }
+  for (const entry of customEnvelope.data.results) {
+    if (entry.outputWidth !== 8 || entry.outputHeight !== 6) {
+      throw new Error(`custom sourceScale result had wrong dimensions ${JSON.stringify(entry)}`);
+    }
+  }
+  const customCodecs = customEnvelope.data.results.map((entry) => entry.codec).sort();
+  if (!customCodecs.includes("png") || !customCodecs.includes("jpeg")) {
+    throw new Error(`custom did not produce PNG + JPEG: ${JSON.stringify(customCodecs)}`);
+  }
+
+  const optimizeMultiBase = join(temp, "optimize-multi.png");
+  const optimizeMulti = await client.callTool({
+    name: "agent2d_optimize",
+    arguments: {
+      inputPath: input,
+      outputPath: optimizeMultiBase,
+      scale: 1,
+      srMode: "balanced",
+      formats: ["png", "jpeg"],
+    },
+  });
+  const optimizeMultiEnvelope = parseTextResult(optimizeMulti);
+  assertSuccess(optimizeMultiEnvelope, "optimize-multi");
+  if (!Array.isArray(optimizeMultiEnvelope.data?.results) || optimizeMultiEnvelope.data.results.length !== 2) {
+    throw new Error(`unexpected optimize multi-format result ${JSON.stringify(optimizeMultiEnvelope.data)}`);
+  }
+
   const optimizedPath = join(temp, "optimized.png");
   const optimize = await client.callTool({
     name: "agent2d_optimize",
@@ -145,6 +229,10 @@ try {
       jxlPixelExact,
       upscaled: [upscaleEnvelope.data.outputWidth, upscaleEnvelope.data.outputHeight],
       x1: [x1Envelope.data.outputWidth, x1Envelope.data.outputHeight],
+      enhanceMulti: enhanceEnvelope.data.results.map((entry) => entry.codec),
+      compressMulti: compressMultiEnvelope.data.results.map((entry) => entry.codec),
+      custom: customEnvelope.data.results.map((entry) => [entry.codec, entry.outputWidth, entry.outputHeight]),
+      optimizeMulti: optimizeMultiEnvelope.data.results.map((entry) => entry.codec),
       optimized: [optimizeEnvelope.data.outputWidth, optimizeEnvelope.data.outputHeight],
       discoveredModels: capabilityEnvelope.data.superResolution.models.length,
     }),
