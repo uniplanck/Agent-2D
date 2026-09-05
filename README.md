@@ -2,12 +2,13 @@
 
 Agent-2D is a local-first 2D image optimization engine for macOS Apple Silicon.
 
-The v0.1 product has two primary operations:
+The v0.1 product has three primary capability families:
 
 - **Super Resolution**: Real-ESRGAN / NCNN / Vulkan based image upscaling.
 - **Super Compression**: exact or preserve-oriented image compression without changing pixel dimensions.
+- **Vectorize to SVG**: in-process VTracer conversion from raster logos, icons, line art, and flat illustrations into real SVG paths.
 
-Both can be combined as **Optimize = Super Resolution → Compression**.
+Super Resolution and Super Compression can be combined as **Optimize = Super Resolution → Compression**. Vectorization is intentionally separate because it changes the representation from raster pixels to editable vector geometry.
 
 ## Interfaces
 
@@ -96,7 +97,7 @@ Primary Desktop functions:
 - window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
 - single-image replace mode or multi-image queue mode with sequential batch processing
 - Before / After preview with per-format switching when multiple output formats are produced
-- Enhance / Compress / Optimize / **Custom**
+- Enhance / Compress / Optimize / **Custom** / **Vectorize**
 - x1 / x2 / x4
 - Custom with target-pixel framing, drag / wheel / keyboard / nudge controls
 - one-click source-size matching plus source-relative 1× / 2× / 4× and editable multiplier sizing
@@ -114,9 +115,19 @@ Primary Desktop functions:
 - partial-output cleanup
 - output size / elapsed time / pixel-exact result
 
-## Future: Vectorize to SVG
+## Vectorize to SVG
 
-SVG export is intentionally treated as **vectorization**, not ordinary super resolution. The planned `Vectorize to SVG` mode targets logos, icons, line art, flat illustrations, and other shape-driven raster inputs. It is not intended as a way to make photographs infinitely detailed. The scoped design is recorded in `Dev/VECTORIZE_SVG_PLAN.md`; full implementation is deferred to a separate sprint.
+SVG export is intentionally treated as **vectorization**, not ordinary super resolution. `Vectorize` uses the in-process VTracer Rust pipeline and targets logos, icons, line art, flat illustrations, and other shape-driven raster inputs. Output is verified to contain real SVG `<path>` geometry and no embedded raster `<image>` element.
+
+Desktop exposes `Illustration`, `Logo / Icon`, and `Line Art` presets plus `Clean`, `Balanced`, and `Detailed` path/detail levels. Logo and illustration modes expose a maximum-color control; line art uses adaptive monochrome thresholding by default. High-color/photo-like inputs receive a non-recommended warning rather than being presented as "infinite-resolution photography".
+
+CLI example:
+
+```bash
+cargo run -p agent2d-cli -- vectorize input.png output.svg --preset logo --detail balanced --max-colors 8
+```
+
+The implementation and validation contract are recorded in `Dev/VECTORIZE_SVG_PLAN.md`.
 
 ## MCP
 
@@ -136,11 +147,12 @@ agent2d_compress
 agent2d_upscale
 agent2d_enhance
 agent2d_custom
+agent2d_vectorize
 agent2d_optimize
 agent2d_capabilities
 ```
 
-`agent2d_custom` mirrors Desktop Custom through AI-friendly numeric arguments: `targetWidth`, `targetHeight` or `sourceScale`, `zoom`, normalized `x` / `y` offsets, `formats[]`, and optional `maxBytes`. `agent2d_enhance`, `agent2d_compress`, and `agent2d_optimize` accept either legacy `format` or multi-output `formats[]`; existing single-format MCP calls remain valid. Compress/Optimize also accept `targetBytes`, while Enhance accepts `targetBytes` for a capped final encode.
+`agent2d_custom` mirrors Desktop Custom through AI-friendly numeric arguments: `targetWidth`, `targetHeight` or `sourceScale`, `zoom`, normalized `x` / `y` offsets, `formats[]`, and optional `maxBytes`. `agent2d_vectorize` exposes `preset`, `detail`, optional `maxColors`, and optional line-art `threshold`, writing a single SVG. `agent2d_enhance`, `agent2d_compress`, and `agent2d_optimize` accept either legacy `format` or multi-output `formats[]`; existing single-format MCP calls remain valid. Compress/Optimize also accept `targetBytes`, while Enhance accepts `targetBytes` for a capped final encode.
 
 ## Validation
 
@@ -152,6 +164,7 @@ Core quality checks include:
 - actual NCNN cancellation and partial-output cleanup
 - 1536×1024 → 3072×2048 M3 Air benchmark
 - Desktop build and app launch
+- real path-based SVG vectorization (no embedded raster image) plus MCP vectorize acceptance
 - MCP stdio client acceptance
 
 ## Distribution boundary

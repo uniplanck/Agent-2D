@@ -1,4 +1,4 @@
-export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize";
+export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve" | "compact";
@@ -55,6 +55,10 @@ export interface DesktopJobRequest {
   cropX?: number | null;
   cropY?: number | null;
   targetBytes?: number | null;
+  vectorPreset?: "illustration" | "logo" | "line-art" | null;
+  vectorDetail?: "clean" | "balanced" | "detailed" | null;
+  vectorMaxColors?: number | null;
+  vectorThreshold?: number | null;
 }
 
 export interface DesktopJobStatus {

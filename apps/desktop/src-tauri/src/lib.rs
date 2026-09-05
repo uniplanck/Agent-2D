@@ -12,10 +12,10 @@ use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
     CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
-    OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale,
-    cleanup_output, inspect_image, validate_output_path,
+    OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale, VectorizeDetail,
+    VectorizePreset, VectorizeRequest, cleanup_output, inspect_image, validate_output_path,
 };
-use agent2d_pipeline::{custom_image_with_cancel, optimize_image_with_cancel};
+use agent2d_pipeline::{custom_image_with_cancel, optimize_image_with_cancel, vectorize_image_with_cancel};
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ enum DesktopOperation {
     Optimize,
     Crop,
     Resize,
+    Vectorize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,6 +52,10 @@ struct DesktopJobRequest {
     crop_x: Option<f64>,
     crop_y: Option<f64>,
     target_bytes: Option<u64>,
+    vector_preset: Option<String>,
+    vector_detail: Option<String>,
+    vector_max_colors: Option<u16>,
+    vector_threshold: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +122,24 @@ fn parse_format(value: &str) -> Result<OutputFormat, Agent2DError> {
             mode: "desktop".into(),
             format: other.into(),
         }),
+    }
+}
+
+fn parse_vector_preset(value: Option<&str>) -> Result<VectorizePreset, Agent2DError> {
+    match value.unwrap_or("illustration") {
+        "illustration" => Ok(VectorizePreset::Illustration),
+        "logo" => Ok(VectorizePreset::Logo),
+        "line-art" => Ok(VectorizePreset::LineArt),
+        other => Err(Agent2DError::BackendFailed { backend: "vtracer".into(), message: format!("unsupported vector preset: {other}") }),
+    }
+}
+
+fn parse_vector_detail(value: Option<&str>) -> Result<VectorizeDetail, Agent2DError> {
+    match value.unwrap_or("balanced") {
+        "clean" => Ok(VectorizeDetail::Clean),
+        "balanced" => Ok(VectorizeDetail::Balanced),
+        "detailed" => Ok(VectorizeDetail::Detailed),
+        other => Err(Agent2DError::BackendFailed { backend: "vtracer".into(), message: format!("unsupported vector detail: {other}") }),
     }
 }
 
@@ -398,6 +421,17 @@ fn execute_job(
             )
         },
         DesktopOperation::Resize => transform_then_compress(request, cancellation, false, format, compression_mode),
+        DesktopOperation::Vectorize => vectorize_image_with_cancel(
+            &VectorizeRequest {
+                input_path,
+                output_path,
+                preset: parse_vector_preset(request.vector_preset.as_deref())?,
+                detail: parse_vector_detail(request.vector_detail.as_deref())?,
+                max_colors: request.vector_max_colors,
+                threshold: request.vector_threshold,
+            },
+            cancellation,
+        ),
     }
 }
 
@@ -481,6 +515,20 @@ fn preview_image_command(path: String) -> Result<String, ErrorPayload> {
             STANDARD.encode(output.stdout)
         ));
     }
+    if extension == "svg" {
+        let bytes = fs::read(path_ref).map_err(|error| internal_error(error.to_string()))?;
+        let svg = std::str::from_utf8(&bytes).map_err(|_| internal_error("SVG preview is not valid UTF-8"))?;
+        let lower = svg.to_ascii_lowercase();
+        if !lower.contains("<svg") || !lower.contains("<path") {
+            return Err(internal_error("SVG preview must contain real vector paths"));
+        }
+        for unsafe_token in ["<script", "<foreignobject", "<image", "javascript:", "xlink:href", " href="] {
+            if lower.contains(unsafe_token) {
+                return Err(internal_error("SVG preview contains unsupported active or external content"));
+            }
+        }
+        return Ok(format!("data:image/svg+xml;base64,{}", STANDARD.encode(bytes)));
+    }
     let mime = match extension.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -499,6 +547,7 @@ fn extension_for_output_format(format: &str) -> Result<&'static str, ErrorPayloa
         "webp" => Ok("webp"),
         "avif" => Ok("avif"),
         "jxl" => Ok("jxl"),
+        "svg" => Ok("svg"),
         other => Err(internal_error(format!("unsupported output format: {other}"))),
     }
 }
@@ -583,6 +632,7 @@ fn start_job_command(
                 (DesktopOperation::Optimize, _) => "super_resolution_then_compression",
                 (DesktopOperation::Crop, _) => "crop_to_size",
                 (DesktopOperation::Resize, _) => "resize_to_size",
+                (DesktopOperation::Vectorize, _) => "vectorize_svg",
             }
             .into();
         });
@@ -712,6 +762,10 @@ mod tests {
             crop_x: None,
             crop_y: None,
             target_bytes: None,
+            vector_preset: None,
+            vector_detail: None,
+            vector_max_colors: None,
+            vector_threshold: None,
         };
         assert!(matches!(
             execute_job(&request, &token),
@@ -761,6 +815,10 @@ mod tests {
             crop_x: Some(0.0),
             crop_y: Some(0.0),
             target_bytes: None,
+            vector_preset: None,
+            vector_detail: None,
+            vector_max_colors: None,
+            vector_threshold: None,
         }
     }
 
@@ -829,6 +887,10 @@ mod tests {
             crop_x: None,
             crop_y: None,
             target_bytes: None,
+            vector_preset: None,
+            vector_detail: None,
+            vector_max_colors: None,
+            vector_threshold: None,
         };
         let result = execute_job(&request, &CancellationToken::new()).unwrap();
         assert_eq!((result.output_width, result.output_height), (160, 90));

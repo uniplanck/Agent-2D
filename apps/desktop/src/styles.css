@@ -28,7 +28,7 @@ button { color: inherit; }
 .runtime-install { border: 1px solid rgba(224,177,84,.35); background: rgba(224,177,84,.09); color: #e8cf9b; border-radius: 999px; padding: 5px 9px; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
 .runtime-install:hover:not(:disabled) { background: rgba(224,177,84,.16); }
 
-.mode-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 5px; border: 1px solid #1b2533; border-radius: 14px; background: rgba(9, 13, 21, .82); }
+.mode-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; padding: 5px; border: 1px solid #1b2533; border-radius: 14px; background: rgba(9, 13, 21, .82); }
 .mode-tabs button { min-height: 52px; border: 1px solid transparent; border-radius: 10px; background: transparent; cursor: pointer; color: #78869e; font-size: 13px; font-weight: 680; transition: 140ms ease; }
 .mode-tabs button small { display: block; margin-top: 3px; color: #4d5a70; font-size: 9px; font-weight: 600; letter-spacing: .06em; }
 .mode-tabs button:hover:not(:disabled) { background: rgba(255,255,255,.025); color: #a8b6cc; }
@@ -173,6 +173,14 @@ select:disabled, input:disabled { opacity: .65; }
 .nudge-pad .down { grid-column: 2; grid-row: 3; }
 .crop-reset-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 8px; }
 .crop-reset-row button { padding: 6px 4px; font-size: 7px; }
+.vectorize-card { display: grid; gap: 9px; padding: 10px; border: 1px solid #23344a; border-radius: 11px; background: linear-gradient(180deg, rgba(18,30,47,.78), rgba(9,15,24,.84)); }
+.vectorize-fields { margin: 0; }
+.vector-color-field { display: grid; grid-template-columns: auto 74px 1fr; align-items: center; gap: 8px; color: #6d7d93; font-size: 9px; }
+.vector-color-field input { min-width: 0; }
+.vector-color-field small { color: #4d5e73; font-size: 8px; line-height: 1.35; }
+.vectorize-note { display: grid; gap: 4px; padding-top: 7px; border-top: 1px solid #1d2b3e; color: #687b94; font-size: 8px; line-height: 1.45; }
+.vectorize-note strong { color: #9db6d5; font-size: 9px; letter-spacing: .04em; }
+.vectorize-warning { color: #a58a69; }
 .format-selector { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
 .format-selector button { min-width: 0; min-height: 42px; display: flex; flex-direction: column; justify-content: center; gap: 2px; border: 1px solid #26354a; border-radius: 9px; background: #0d1520; color: #687a94; padding: 5px 3px; cursor: pointer; transition: 130ms ease; }
 .format-selector button strong { color: inherit; font-size: 8px; }
@@ -296,7 +304,7 @@ select:disabled, input:disabled { opacity: .65; }
   .source-multiplier-input { grid-column: 1 / 4; }
   .source-multiplier-tools > button:last-child { grid-column: 4; }
   .app-shell { padding: 14px; }
-  .mode-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
+  .mode-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; }
   .mode-tabs button { min-width: 0; padding-inline: 4px; font-size: 11px; }
   .mode-tabs button small { font-size: 8px; }
   .workspace-grid { grid-template-columns: 280px 1fr; }

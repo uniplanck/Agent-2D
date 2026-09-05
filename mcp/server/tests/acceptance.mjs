@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -11,11 +11,14 @@ const serverEntry = resolve(root, "mcp/server/dist/index.js");
 const agent2dBin = resolve(root, "target/debug/agent2d");
 const temp = await mkdtemp(join(tmpdir(), "agent2d-mcp-"));
 const input = join(temp, "fixture.png");
+const vectorInput = join(temp, "vector-fixture.png");
 
 try {
   execFileSync("magick", ["-size", "4x3", "xc:#336699", input], { stdio: "pipe" });
+  execFileSync("magick", ["-size", "64x64", "xc:white", "-fill", "#174ea6", "-draw", "rectangle 10,10 28,54 rectangle 28,10 54,26", vectorInput], { stdio: "pipe" });
 
   const client = new Client({ name: "agent2d-acceptance", version: "0.1.0" }, { capabilities: {} });
+  const callTool = (params) => client.callTool(params, undefined, { timeout: 180_000 });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverEntry],
@@ -31,6 +34,7 @@ try {
     "agent2d_enhance",
     "agent2d_compress",
     "agent2d_custom",
+    "agent2d_vectorize",
     "agent2d_optimize",
     "agent2d_capabilities",
   ]);
@@ -38,14 +42,14 @@ try {
     if (!tools.tools.some((tool) => tool.name === name)) throw new Error(`missing MCP tool ${name}`);
   }
 
-  const capabilities = await client.callTool({ name: "agent2d_capabilities", arguments: {} });
+  const capabilities = await callTool({ name: "agent2d_capabilities", arguments: {} });
   const capabilityEnvelope = parseTextResult(capabilities);
   if (capabilityEnvelope.ok !== true) throw new Error("capabilities tool returned failure");
   if (!Array.isArray(capabilityEnvelope.data?.superResolution?.models)) {
     throw new Error("capabilities did not expose SR models");
   }
 
-  const inspection = await client.callTool({
+  const inspection = await callTool({
     name: "agent2d_inspect",
     arguments: { inputPath: input },
   });
@@ -56,7 +60,7 @@ try {
   }
 
   const compressedPath = join(temp, "compressed.png");
-  const compression = await client.callTool({
+  const compression = await callTool({
     name: "agent2d_compress",
     arguments: { inputPath: input, outputPath: compressedPath, mode: "exact", format: "png" },
   });
@@ -67,7 +71,7 @@ try {
   let jxlPixelExact = null;
   if (capabilityEnvelope.data?.compression?.jxlLossless === true) {
     const jxlPath = join(temp, "compressed.jxl");
-    const jxlCompression = await client.callTool({
+    const jxlCompression = await callTool({
       name: "agent2d_compress",
       arguments: { inputPath: input, outputPath: jxlPath, mode: "exact", format: "jxl" },
     });
@@ -76,7 +80,7 @@ try {
     if (jxlEnvelope.data?.pixelExact !== true) throw new Error("JXL compress was not pixel-exact");
     jxlPixelExact = jxlEnvelope.data.pixelExact;
 
-    const jxlInspection = await client.callTool({
+    const jxlInspection = await callTool({
       name: "agent2d_inspect",
       arguments: { inputPath: jxlPath },
     });
@@ -87,7 +91,7 @@ try {
     }
 
     const jxlRoundTripPath = join(temp, "jxl-roundtrip.png");
-    const jxlRoundTrip = await client.callTool({
+    const jxlRoundTrip = await callTool({
       name: "agent2d_compress",
       arguments: { inputPath: jxlPath, outputPath: jxlRoundTripPath, mode: "exact", format: "png" },
     });
@@ -97,7 +101,7 @@ try {
   }
 
   const upscaledPath = join(temp, "upscaled.png");
-  const upscale = await client.callTool({
+  const upscale = await callTool({
     name: "agent2d_upscale",
     arguments: { inputPath: input, outputPath: upscaledPath, scale: 2, mode: "balanced" },
   });
@@ -108,7 +112,7 @@ try {
   }
 
   const x1Path = join(temp, "x1.png");
-  const x1 = await client.callTool({
+  const x1 = await callTool({
     name: "agent2d_upscale",
     arguments: { inputPath: input, outputPath: x1Path, scale: 1, mode: "balanced" },
   });
@@ -120,7 +124,7 @@ try {
   if (x1Envelope.data?.modelId != null) throw new Error("x1 unexpectedly ran an SR model");
 
   const enhanceBase = join(temp, "enhance.png");
-  const enhance = await client.callTool({
+  const enhance = await callTool({
     name: "agent2d_enhance",
     arguments: {
       inputPath: input,
@@ -142,7 +146,7 @@ try {
   }
 
   const compressMultiBase = join(temp, "compress-multi.png");
-  const compressMulti = await client.callTool({
+  const compressMulti = await callTool({
     name: "agent2d_compress",
     arguments: {
       inputPath: input,
@@ -157,7 +161,7 @@ try {
   }
 
   const customBase = join(temp, "custom.png");
-  const custom = await client.callTool({
+  const custom = await callTool({
     name: "agent2d_custom",
     arguments: {
       inputPath: input,
@@ -185,7 +189,7 @@ try {
   }
 
   const optimizeMultiBase = join(temp, "optimize-multi.png");
-  const optimizeMulti = await client.callTool({
+  const optimizeMulti = await callTool({
     name: "agent2d_optimize",
     arguments: {
       inputPath: input,
@@ -201,8 +205,29 @@ try {
     throw new Error(`unexpected optimize multi-format result ${JSON.stringify(optimizeMultiEnvelope.data)}`);
   }
 
+  const vectorPath = join(temp, "vector.svg");
+  const vectorized = await callTool({
+    name: "agent2d_vectorize",
+    arguments: {
+      inputPath: vectorInput,
+      outputPath: vectorPath,
+      preset: "logo",
+      detail: "clean",
+      maxColors: 4,
+    },
+  });
+  const vectorEnvelope = parseTextResult(vectorized);
+  assertSuccess(vectorEnvelope, "vectorize");
+  if (vectorEnvelope.data?.codec !== "svg") {
+    throw new Error(`vectorize did not report SVG codec: ${JSON.stringify(vectorEnvelope.data)}`);
+  }
+  const vectorSvg = await readFile(vectorPath, "utf8");
+  if (!vectorSvg.includes("<path") || vectorSvg.includes("<image")) {
+    throw new Error("vectorize output was not real path-based SVG");
+  }
+
   const optimizedPath = join(temp, "optimized.png");
-  const optimize = await client.callTool({
+  const optimize = await callTool({
     name: "agent2d_optimize",
     arguments: {
       inputPath: input,
@@ -232,6 +257,7 @@ try {
       enhanceMulti: enhanceEnvelope.data.results.map((entry) => entry.codec),
       compressMulti: compressMultiEnvelope.data.results.map((entry) => entry.codec),
       custom: customEnvelope.data.results.map((entry) => [entry.codec, entry.outputWidth, entry.outputHeight]),
+      vectorized: [vectorEnvelope.data.codec, vectorEnvelope.data.outputWidth, vectorEnvelope.data.outputHeight],
       optimizeMulti: optimizeMultiEnvelope.data.results.map((entry) => entry.codec),
       optimized: [optimizeEnvelope.data.outputWidth, optimizeEnvelope.data.outputHeight],
       discoveredModels: capabilityEnvelope.data.superResolution.models.length,

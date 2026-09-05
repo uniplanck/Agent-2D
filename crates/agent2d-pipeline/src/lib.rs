@@ -1,4 +1,6 @@
 use std::{
+    collections::HashSet,
+    fs,
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -8,11 +10,14 @@ use std::{
 use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CustomRequest, InspectRequest,
-    OptimizeRequest, UpscaleRequest, UpscaleScale, cleanup_output, inspect_image, validate_output_path,
+    OptimizeRequest, UpscaleRequest, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest,
+    cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_sr::upscale_image_with_cancel;
 use tempfile::tempdir;
 use uuid::Uuid;
+use vtracer::{ColorImage, Config as VectorConfig, Hierarchical, Preset as VectorPreset};
+use vtracer::progress::CancelToken as VectorCancelToken;
 
 fn crop_geometry(
     input_width: u32,
@@ -175,6 +180,201 @@ pub fn custom_image_with_cancel(
     })
 }
 
+fn vector_config(request: &VectorizeRequest) -> VectorConfig {
+    let mut config = match request.preset {
+        VectorizePreset::LineArt => VectorConfig::from_preset(VectorPreset::Bw),
+        VectorizePreset::Logo | VectorizePreset::Illustration => VectorConfig::from_preset(VectorPreset::Poster),
+    };
+    config.hierarchical = Hierarchical::Cutout;
+    config.optimize = 2;
+    match request.detail {
+        VectorizeDetail::Clean => {
+            config.filter_speckle = 6;
+            config.simplify = Some(1.6);
+            config.path_precision = Some(1);
+        }
+        VectorizeDetail::Balanced => {
+            config.filter_speckle = 3;
+            config.simplify = Some(0.8);
+            config.path_precision = Some(2);
+        }
+        VectorizeDetail::Detailed => {
+            config.filter_speckle = 1;
+            config.simplify = Some(0.3);
+            config.path_precision = Some(3);
+        }
+    }
+    match request.preset {
+        VectorizePreset::LineArt => {
+            config.binary_threshold = request.threshold.unwrap_or(128);
+            config.binary_adaptive = request.threshold.is_none();
+        }
+        VectorizePreset::Logo => {
+            config.max_colors = Some(request.max_colors.unwrap_or(8).clamp(2, 32) as usize);
+        }
+        VectorizePreset::Illustration => {
+            let default_colors = match request.detail {
+                VectorizeDetail::Clean => 12,
+                VectorizeDetail::Balanced => 24,
+                VectorizeDetail::Detailed => 48,
+            };
+            config.max_colors = Some(request.max_colors.unwrap_or(default_colors).clamp(2, 64) as usize);
+        }
+    }
+    config
+}
+
+fn sampled_color_complexity(raw: &[u8]) -> usize {
+    if raw.len() < 4 {
+        return 0;
+    }
+    let pixels = raw.len() / 4;
+    let step = (pixels / 4096).max(1);
+    let mut colors = HashSet::new();
+    for index in (0..pixels).step_by(step) {
+        let offset = index * 4;
+        let r = raw[offset] >> 4;
+        let g = raw[offset + 1] >> 4;
+        let b = raw[offset + 2] >> 4;
+        colors.insert(((r as u16) << 8) | ((g as u16) << 4) | b as u16);
+        if colors.len() > 512 {
+            break;
+        }
+    }
+    colors.len()
+}
+
+pub fn vectorize_image(request: &VectorizeRequest) -> Result<Agent2DResult, Agent2DError> {
+    vectorize_image_with_cancel(request, &CancellationToken::new())
+}
+
+pub fn vectorize_image_with_cancel(
+    request: &VectorizeRequest,
+    cancellation: &CancellationToken,
+) -> Result<Agent2DResult, Agent2DError> {
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    if request.output_path.extension().and_then(|value| value.to_str()).map(|value| value.eq_ignore_ascii_case("svg")) != Some(true) {
+        return Err(Agent2DError::UnsupportedCompression {
+            mode: "vectorize".into(),
+            format: "svg_output_required".into(),
+        });
+    }
+    let started = Instant::now();
+    validate_output_path(&request.input_path, &request.output_path)?;
+    let input = inspect_image(&InspectRequest { input_path: request.input_path.clone() })?;
+    let temp = tempdir().map_err(|error| Agent2DError::ImageWrite {
+        path: "temporary_directory".into(),
+        message: error.to_string(),
+    })?;
+    let decoded = match image::open(&request.input_path) {
+        Ok(value) => value,
+        Err(_) => {
+            let normalized = temp.path().join("agent2d-vectorize-input.png");
+            run_transform_to_png(&request.input_path, &normalized, "null", cancellation)?;
+            image::open(&normalized).map_err(|source| Agent2DError::ImageDecode {
+                path: request.input_path.to_string_lossy().into_owned(),
+                source,
+            })?
+        }
+    };
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let color_complexity = sampled_color_complexity(rgba.as_raw());
+    let image = ColorImage {
+        pixels: rgba.into_raw(),
+        width: width as usize,
+        height: height as usize,
+    };
+    let config = vector_config(request);
+    let pipeline = config.build().map_err(|error| Agent2DError::BackendFailed {
+        backend: "vtracer".into(),
+        message: error.to_string(),
+    })?;
+
+    let vector_cancel = VectorCancelToken::new();
+    let watcher_token = vector_cancel.clone();
+    let agent_cancel = cancellation.clone();
+    let watcher = thread::spawn(move || {
+        while !watcher_token.is_cancelled() {
+            if agent_cancel.is_cancelled() {
+                watcher_token.cancel();
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    });
+    let run = pipeline.run_with_progress(&image, &vector_cancel, &mut |_| {});
+    vector_cancel.cancel();
+    let _ = watcher.join();
+    let document = match run {
+        Ok(value) => value,
+        Err(vtracer::Error::Cancelled) => return Err(Agent2DError::Cancelled),
+        Err(error) => {
+            return Err(Agent2DError::BackendFailed {
+                backend: "vtracer".into(),
+                message: error.to_string(),
+            })
+        }
+    };
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let svg = pipeline.writer.write(&document);
+    let path_count = svg.matches("<path").count();
+    if path_count == 0 || svg.contains("<image") {
+        return Err(Agent2DError::BackendFailed {
+            backend: "vtracer".into(),
+            message: "vector output did not contain real SVG paths".into(),
+        });
+    }
+    if path_count > 50_000 {
+        return Err(Agent2DError::BackendFailed {
+            backend: "vtracer".into(),
+            message: format!("vector path count is unreasonably high: {path_count}"),
+        });
+    }
+    fs::write(&request.output_path, svg.as_bytes()).map_err(|error| {
+        cleanup_output(&request.output_path);
+        Agent2DError::ImageWrite {
+            path: request.output_path.to_string_lossy().into_owned(),
+            message: error.to_string(),
+        }
+    })?;
+    let output_bytes = fs::metadata(&request.output_path)
+        .map(|metadata| metadata.len())
+        .map_err(|error| Agent2DError::ImageWrite {
+            path: request.output_path.to_string_lossy().into_owned(),
+            message: error.to_string(),
+        })?;
+    let mut warnings = vec![
+        "vectorized_svg_real_paths".into(),
+        format!("vector_paths_{path_count}"),
+        format!("vector_color_complexity_{color_complexity}"),
+    ];
+    if color_complexity > 192 {
+        warnings.push("photo_like_or_high_color_input_vectorization_not_recommended".into());
+    }
+    Ok(Agent2DResult {
+        job_id: Uuid::new_v4().to_string(),
+        input_path: request.input_path.clone(),
+        output_path: request.output_path.clone(),
+        input_width: input.width,
+        input_height: input.height,
+        output_width: input.width,
+        output_height: input.height,
+        input_bytes: input.input_bytes,
+        output_bytes,
+        compression_ratio: if output_bytes == 0 { 0.0 } else { input.input_bytes as f64 / output_bytes as f64 },
+        model_id: Some("vtracer-1.0.0-alpha.4".into()),
+        codec: Some("svg".into()),
+        pixel_exact: Some(false),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        warnings,
+    })
+}
+
 pub fn optimize_image(request: &OptimizeRequest) -> Result<Agent2DResult, Agent2DError> {
     optimize_image_with_cancel(request, &CancellationToken::new())
 }
@@ -286,7 +486,7 @@ mod tests {
     use super::*;
     use agent2d_core::{
         CompressionMode, CompressionOptions, OutputFormat, SuperResolutionMode, UpscaleOptions,
-        UpscaleScale,
+        UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest,
     };
     use agent2d_sr::capabilities;
     use image::{ImageFormat, Rgb, RgbImage};
@@ -372,6 +572,39 @@ mod tests {
         assert_eq!(result.model_id, None);
         assert_eq!(result.pixel_exact, Some(true));
         assert!(result.warnings.iter().any(|warning| warning == "sr_skipped_scale_1_dimensions_preserved"));
+    }
+
+    #[test]
+    fn vectorize_logo_produces_real_svg_paths() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("logo.png");
+        let output = dir.path().join("logo.svg");
+        let mut image = RgbImage::from_pixel(64, 64, Rgb([245, 245, 245]));
+        for y in 12..52 {
+            for x in 12..52 {
+                if x < 22 || y < 22 || (x > 42 && y > 42) {
+                    image.put_pixel(x, y, Rgb([20, 40, 180]));
+                }
+            }
+        }
+        image.save_with_format(&input, ImageFormat::Png).unwrap();
+
+        let result = vectorize_image(&VectorizeRequest {
+            input_path: input,
+            output_path: output.clone(),
+            preset: VectorizePreset::Logo,
+            detail: VectorizeDetail::Balanced,
+            max_colors: Some(4),
+            threshold: None,
+        }).unwrap();
+        let svg = std::fs::read_to_string(&output).unwrap();
+        let paths = svg.matches("<path").count();
+        assert!(paths > 0);
+        assert!(paths < 1000);
+        assert!(!svg.contains("<image"));
+        assert_eq!(result.codec.as_deref(), Some("svg"));
+        assert_eq!((result.output_width, result.output_height), (64, 64));
+        assert!(result.warnings.iter().any(|warning| warning == "vectorized_svg_real_paths"));
     }
 
     #[test]

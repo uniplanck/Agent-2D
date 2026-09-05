@@ -1,6 +1,6 @@
 # Agent-2D Third-Party Notices
 
-Updated: 2026-09-03
+Updated: 2026-09-05
 
 This document records the main third-party boundaries used by Agent-2D v0.1. It is an engineering inventory, not legal advice.
 
@@ -50,6 +50,18 @@ Model and dataset terms can be more specific than a repository-level software li
 ## Tauri and Rust/JavaScript dependencies
 
 Agent-2D Desktop uses Tauri 2, React, Vite, and their dependency graphs. Cargo and npm lockfiles pin the dependency set used to build v0.1. A public binary distribution should generate a complete software-bill-of-materials/license report from those lockfiles before release.
+
+## VTracer vectorization
+
+Agent-2D's `Vectorize to SVG` operation embeds the Rust `vtracer` framework as a build dependency and uses it in-process to trace raster illustrations, logos, icons, and line art into real SVG paths.
+
+- Crate: `vtracer` `1.0.0-alpha.4`
+- Project: `visioncortex/vtracer`
+- Upstream license: MIT OR Apache-2.0
+- Repository: https://github.com/visioncortex/vtracer/
+- Crates.io: https://crates.io/crates/vtracer/1.0.0-alpha.4
+
+Unlike the optional Real-ESRGAN runtime, VTracer is linked into builds through Cargo. A future public binary distribution should therefore include the applicable VTracer and transitive dependency notices generated from `Cargo.lock`.
 
 ## Compression backends
 

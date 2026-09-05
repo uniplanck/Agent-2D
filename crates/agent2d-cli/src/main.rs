@@ -5,9 +5,9 @@ use agent2d_core::{
     Agent2DResult, ApiEnvelope, CompressRequest, CompressionMode, CompressionOptions, CustomRequest,
     InspectRequest, InspectResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION,
     SuperResolutionMode, SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale,
-    inspect_image,
+    VectorizeDetail, VectorizePreset, VectorizeRequest, inspect_image,
 };
-use agent2d_pipeline::{custom_image, optimize_image};
+use agent2d_pipeline::{custom_image, optimize_image, vectorize_image};
 use agent2d_sr::{
     RuntimeStatus, SrCapabilities, capabilities as sr_capabilities, install_runtime,
     runtime_status, upscale_image,
@@ -112,6 +112,21 @@ enum Command {
         #[arg(long)]
         max_bytes: Option<u64>,
     },
+    #[command(about = "Vectorize illustration/logo/line-art raster input into real SVG paths")]
+    Vectorize {
+        #[arg(value_name = "IMAGE")]
+        input: PathBuf,
+        #[arg(value_name = "OUTPUT_SVG")]
+        output: PathBuf,
+        #[arg(long, value_enum, default_value_t = VectorPresetArg::Illustration)]
+        preset: VectorPresetArg,
+        #[arg(long, value_enum, default_value_t = VectorDetailArg::Balanced)]
+        detail: VectorDetailArg,
+        #[arg(long)]
+        max_colors: Option<u16>,
+        #[arg(long)]
+        threshold: Option<u8>,
+    },
     #[command(about = "Run upscale + compression as one pipeline")]
     Optimize {
         #[arg(value_name = "IMAGE")]
@@ -143,6 +158,41 @@ enum Command {
     RuntimeStatus,
     #[command(about = "Install the pinned official Real-ESRGAN NCNN runtime locally")]
     RuntimeInstall,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum VectorPresetArg {
+    Illustration,
+    Logo,
+    #[value(name = "line-art")]
+    LineArt,
+}
+
+impl From<VectorPresetArg> for VectorizePreset {
+    fn from(value: VectorPresetArg) -> Self {
+        match value {
+            VectorPresetArg::Illustration => VectorizePreset::Illustration,
+            VectorPresetArg::Logo => VectorizePreset::Logo,
+            VectorPresetArg::LineArt => VectorizePreset::LineArt,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum VectorDetailArg {
+    Clean,
+    Balanced,
+    Detailed,
+}
+
+impl From<VectorDetailArg> for VectorizeDetail {
+    fn from(value: VectorDetailArg) -> Self {
+        match value {
+            VectorDetailArg::Clean => VectorizeDetail::Clean,
+            VectorDetailArg::Balanced => VectorizeDetail::Balanced,
+            VectorDetailArg::Detailed => VectorizeDetail::Detailed,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -448,6 +498,27 @@ fn main() -> ExitCode {
                 }
             }
             success(&MultiOutputResult { results }, cli.pretty)
+        }
+        Command::Vectorize {
+            input,
+            output,
+            preset,
+            detail,
+            max_colors,
+            threshold,
+        } => {
+            let request = VectorizeRequest {
+                input_path: input,
+                output_path: output,
+                preset: preset.into(),
+                detail: detail.into(),
+                max_colors,
+                threshold,
+            };
+            match vectorize_image(&request) {
+                Ok(result) => success(&result, cli.pretty),
+                Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+            }
         }
         Command::Optimize {
             input,

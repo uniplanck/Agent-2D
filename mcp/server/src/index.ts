@@ -129,6 +129,23 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "agent2d_vectorize",
+      description: "Vectorize a raster illustration, logo, icon, or line-art image into real SVG paths. This is not photo super-resolution; photo-like inputs may produce a warning.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          preset: { type: "string", enum: ["illustration", "logo", "line-art"] },
+          detail: { type: "string", enum: ["clean", "balanced", "detailed"] },
+          maxColors: { type: "integer", minimum: 2, maximum: 64 },
+          threshold: { type: "integer", minimum: 0, maximum: 255 },
+        },
+        required: ["inputPath", "outputPath"],
+        additionalProperties: false,
+      },
+    },
+    {
       name: "agent2d_optimize",
       description: "Run Agent-2D optimization. scale=1 skips super-resolution and performs conversion/compression only; higher scales run SR then compression.",
       inputSchema: {
@@ -181,6 +198,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "agent2d_custom":
         result = await runAgent2d(buildCustomArgs(args));
+        break;
+      case "agent2d_vectorize":
+        result = await runAgent2d(buildVectorizeArgs(args));
         break;
       case "agent2d_optimize":
         result = await runAgent2d(buildOptimizeArgs(args));
@@ -263,6 +283,21 @@ function buildCustomArgs(args: Record<string, unknown>): string[] {
   const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
   command.push("--formats", formats.join(","));
   appendNumber(command, "--max-bytes", args.maxBytes);
+  return command;
+}
+
+function buildVectorizeArgs(args: Record<string, unknown>): string[] {
+  const command = [
+    "vectorize",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+    "--preset",
+    optionalEnum(args, "preset", ["illustration", "logo", "line-art"], "illustration"),
+    "--detail",
+    optionalEnum(args, "detail", ["clean", "balanced", "detailed"], "balanced"),
+  ];
+  appendNumber(command, "--max-colors", args.maxColors);
+  appendNonNegativeInteger(command, "--threshold", args.threshold, 255);
   return command;
 }
 
@@ -384,6 +419,14 @@ function appendNumber(command: string[], flag: string, value: unknown): void {
 
 function appendFiniteNumber(command: string[], flag: string, value: unknown): void {
   if (typeof value === "number" && Number.isFinite(value)) command.push(flag, String(value));
+}
+
+function appendNonNegativeInteger(command: string[], flag: string, value: unknown, max: number): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
+    throw new Error(`${flag} must be an integer from 0 to ${max}`);
+  }
+  command.push(flag, String(value));
 }
 
 function optionalScale(args: Record<string, unknown>, key: string, fallback: number): number {

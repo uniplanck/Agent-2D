@@ -193,6 +193,33 @@ pub struct CustomRequest {
     pub compression: CompressionOptions,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VectorizePreset {
+    Illustration,
+    Logo,
+    LineArt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VectorizeDetail {
+    Clean,
+    Balanced,
+    Detailed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorizeRequest {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub preset: VectorizePreset,
+    pub detail: VectorizeDetail,
+    pub max_colors: Option<u16>,
+    pub threshold: Option<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizeRequest {

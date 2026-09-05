@@ -21,6 +21,8 @@ const POLL_MS = 180;
 const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "avif", "jxl"]);
 
 type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
+type VectorPreset = "illustration" | "logo" | "line-art";
+type VectorDetail = "clean" | "balanced" | "detailed";
 interface QueueEntry {
   path: string;
   state: QueueState;
@@ -251,8 +253,10 @@ function outputFor(input: string, operation: Operation, format: OutputFormat, ba
         ? "custom"
         : operation === "resize"
           ? "resized"
-          : "optimized";
-  const ext = format === "jpeg" ? "jpg" : format;
+          : operation === "vectorize"
+            ? "vectorized"
+            : "optimized";
+  const ext = operation === "vectorize" ? "svg" : format === "jpeg" ? "jpg" : format;
   return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
 }
 
@@ -273,6 +277,13 @@ function withExtension(filename: string, format: OutputFormat): string {
   return `${stem || "output"}.${ext}`;
 }
 
+function withSvgExtension(filename: string): string {
+  const trimmed = filename.trim();
+  const dot = trimmed.lastIndexOf(".");
+  const stem = dot > 0 ? trimmed.slice(0, dot) : trimmed;
+  return `${stem || "output"}.svg`;
+}
+
 function outputNameForFormat(filename: string, format: OutputFormat, multiFormat: boolean): string {
   if (!multiFormat) return filename;
   const trimmed = filename.trim();
@@ -286,6 +297,7 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
   const megapixels = Math.max(0.1, (info.width * info.height) / 1_000_000);
   const compressionMs = 650 + megapixels * 520;
   if (operation === "crop" || operation === "resize") return 850 + megapixels * 620;
+  if (operation === "vectorize") return 1_100 + megapixels * 1_850;
   if (operation === "compress" || scale === 1) return compressionMs;
   const srMs = scale === 4
     ? 2_800 + megapixels * 12_500
@@ -303,6 +315,7 @@ function stageLabel(stage?: string): string {
     case "compression_conversion_only": return "解像度維持 / 圧縮・変換";
     case "crop_to_size": return "Custom書き出し";
     case "resize_to_size": return "指定サイズへ縮小";
+    case "vectorize_svg": return "SVGベクター化";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
     case "cancelled": return "キャンセル済み";
@@ -332,6 +345,7 @@ function modeLabel(mode: Operation): string {
   if (mode === "compress") return "Compress";
   if (mode === "crop") return "Custom";
   if (mode === "resize") return "Resize to Size";
+  if (mode === "vectorize") return "Vectorize";
   return "Optimize";
 }
 
@@ -398,6 +412,9 @@ export default function App() {
   const [sizeCapEnabled, setSizeCapEnabled] = useState(false);
   const [sizeCapValue, setSizeCapValue] = useState(1);
   const [sizeCapUnit, setSizeCapUnit] = useState<"KB" | "MB">("MB");
+  const [vectorPreset, setVectorPreset] = useState<VectorPreset>("illustration");
+  const [vectorDetail, setVectorDetail] = useState<VectorDetail>("balanced");
+  const [vectorMaxColors, setVectorMaxColors] = useState(24);
   const cancelBatchRef = useRef(false);
   const outputDirectoryPinnedRef = useRef(false);
   const compareStageRef = useRef<HTMLDivElement>(null);
@@ -591,6 +608,15 @@ export default function App() {
     });
   }, [outputDirectory]);
 
+  const resolveVectorDestination = useCallback(async (filename: string): Promise<string> => {
+    if (!outputDirectory) throw new Error("保存先フォルダを選択してください。");
+    return invoke<string>("resolve_output_path_command", {
+      directory: outputDirectory,
+      filename,
+      format: "svg",
+    });
+  }, [outputDirectory]);
+
   const runOne = useCallback(async (path: string, destination: string, targetFormat: OutputFormat): Promise<DesktopJobStatus | null> => {
     const useCompact = operation === "crop" && customTargetBytes != null;
     const request: DesktopJobRequest = {
@@ -608,6 +634,10 @@ export default function App() {
       cropX: operation === "crop" ? cropX : null,
       cropY: operation === "crop" ? cropY : null,
       targetBytes: operation === "crop" ? customTargetBytes : null,
+      vectorPreset: operation === "vectorize" ? vectorPreset : null,
+      vectorDetail: operation === "vectorize" ? vectorDetail : null,
+      vectorMaxColors: operation === "vectorize" && vectorPreset !== "line-art" ? vectorMaxColors : null,
+      vectorThreshold: null,
     };
     try {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
@@ -655,23 +685,26 @@ export default function App() {
         error: { code: "desktop_request_error", message: errorText(cause) },
       };
     }
-  }, [cropX, cropY, cropZoom, customTargetBytes, modelId, operation, scale, srMode, targetHeight, targetWidth]);
+  }, [cropX, cropY, cropZoom, customTargetBytes, modelId, operation, scale, srMode, targetHeight, targetWidth, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
-    if (running || selectedFormats.length === 0) return;
+    if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
+    const runFormats: OutputFormat[] = operation === "vectorize" ? ["png"] : selectedFormats;
     setError("");
     setResult(null);
     setOutputResults([]);
     setComparisonOutputs([]);
-    setComparisonFormat(selectedFormats[0] ?? "png");
+    setComparisonFormat(runFormats[0] ?? "png");
     setOutputPreview("");
 
     if (!multiMode) {
       if (!inputPath || !outputDirectory || !outputName.trim()) return;
       const failures: string[] = [];
-      for (const targetFormat of selectedFormats) {
+      for (const targetFormat of runFormats) {
         try {
-          const destination = await resolveDestination(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat);
+          const destination = operation === "vectorize"
+            ? await resolveVectorDestination(withSvgExtension(outputName))
+            : await resolveDestination(outputNameForFormat(outputName, targetFormat, runFormats.length > 1), targetFormat);
           setOutputPath(destination);
           const terminal = await runOne(inputPath, destination, targetFormat);
           if (terminal?.state === "cancelled") break;
@@ -707,13 +740,15 @@ export default function App() {
       }
 
       let pathState: QueueState = "completed";
-      for (const targetFormat of selectedFormats) {
+      for (const targetFormat of runFormats) {
         if (cancelBatchRef.current) {
           pathState = "cancelled";
           break;
         }
         try {
-          const destination = await resolveDestination(outputNameForFormat(outputNameFor(path, operation, targetFormat, true), targetFormat, selectedFormats.length > 1), targetFormat);
+          const destination = operation === "vectorize"
+            ? await resolveVectorDestination(outputNameFor(path, operation, targetFormat, true))
+            : await resolveDestination(outputNameForFormat(outputNameFor(path, operation, targetFormat, true), targetFormat, runFormats.length > 1), targetFormat);
           setOutputPath(destination);
           const terminal = await runOne(path, destination, targetFormat);
           if (terminal?.state === "cancelled") {
@@ -776,9 +811,11 @@ export default function App() {
     return (1 - displayResult.outputBytes / displayResult.inputBytes) * 100;
   }, [displayResult]);
 
-  const qualityNote = operation === "crop" && customTargetBytes != null
-    ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
-    : selectedFormats.map(formatQualityText).join(" · ");
+  const qualityNote = operation === "vectorize"
+    ? "本物のSVG pathへ変換します。ロゴ・アイコン・線画・フラットイラスト向け。写真や細かな質感主体の画像には非推奨です。"
+    : operation === "crop" && customTargetBytes != null
+      ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
+      : selectedFormats.map(formatQualityText).join(" · ");
 
   const elapsedMs = jobTiming ? Math.max(0, clock - jobTiming.startedAt) : 0;
   const adaptiveTotalMs = jobTiming
@@ -799,7 +836,9 @@ export default function App() {
       : "";
   const visibleOutputName = outputResults.length > 0
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
-    : selectedFormats.map((targetFormat) => withExtension(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat)).join(" · ");
+    : operation === "vectorize"
+      ? withSvgExtension(outputName)
+      : selectedFormats.map((targetFormat) => withExtension(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat)).join(" · ");
 
   const updateCompareFromClientX = useCallback((clientX: number) => {
     const rect = compareStageRef.current?.getBoundingClientRect();
@@ -941,10 +980,10 @@ export default function App() {
       )}
 
       <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize", "crop"] as Operation[]).map((item) => (
+        {(["enhance", "compress", "optimize", "crop", "vectorize"] as Operation[]).map((item) => (
           <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
             {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : "サイズ・構図・容量"}</small>
+            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : "SVG化 · イラスト/線画"}</small>
           </button>
         ))}
       </section>
@@ -1141,6 +1180,53 @@ export default function App() {
             </>
           )}
 
+          {operation === "vectorize" && (
+            <>
+              <div className="section-label">VECTORIZE TO SVG</div>
+              <div className="vectorize-card">
+                <div className="field-row two vectorize-fields">
+                  <label>
+                    <span>Preset</span>
+                    <select
+                      value={vectorPreset}
+                      onChange={(event) => {
+                        const next = event.target.value as VectorPreset;
+                        setVectorPreset(next);
+                        if (next === "logo") setVectorMaxColors(8);
+                        else if (next === "illustration") setVectorMaxColors(24);
+                      }}
+                      disabled={running}
+                    >
+                      <option value="illustration">Illustration · 推奨</option>
+                      <option value="logo">Logo / Icon</option>
+                      <option value="line-art">Line Art</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Detail</span>
+                    <select value={vectorDetail} onChange={(event) => setVectorDetail(event.target.value as VectorDetail)} disabled={running}>
+                      <option value="clean">Clean · 少ないpath</option>
+                      <option value="balanced">Balanced · 推奨</option>
+                      <option value="detailed">Detailed · 細部優先</option>
+                    </select>
+                  </label>
+                </div>
+                {vectorPreset !== "line-art" && (
+                  <label className="vector-color-field">
+                    <span>最大色数</span>
+                    <input type="number" min={2} max={64} value={vectorMaxColors} onChange={(event) => setVectorMaxColors(clamp(Math.round(Number(event.target.value) || 2), 2, 64))} disabled={running} />
+                    <small>少ないほどロゴ的で軽量。多いほど元画像の色を残します。</small>
+                  </label>
+                )}
+                <div className="vectorize-note">
+                  <strong>Raster → real SVG paths</strong>
+                  <span>ロゴ・アイコン・線画・フラットイラスト向け。埋め込み画像ではなくベクターpathを生成します。</span>
+                  <span className="vectorize-warning">写真・複雑な自然画像・微細な質感が主役の素材には非推奨です。</span>
+                </div>
+              </div>
+            </>
+          )}
+
           {(operation === "enhance" || operation === "optimize") && (
             <>
               <div className="section-label">SUPER RESOLUTION</div>
@@ -1200,25 +1286,29 @@ export default function App() {
             </>
           )}
 
-          <div className="section-label">OUTPUT FORMATS</div>
-          <div className="format-selector" role="group" aria-label="出力形式を複数選択">
-            {OUTPUT_FORMATS.map((item) => {
-              const active = selectedFormats.includes(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={active ? "active" : ""}
-                  aria-pressed={active}
-                  onClick={() => toggleOutputFormat(item.id)}
-                  disabled={running}
-                >
-                  <strong>{item.label}</strong>
-                  <small>{item.detail}</small>
-                </button>
-              );
-            })}
-          </div>
+          {operation !== "vectorize" && (
+            <>
+              <div className="section-label">OUTPUT FORMATS</div>
+              <div className="format-selector" role="group" aria-label="出力形式を複数選択">
+                {OUTPUT_FORMATS.map((item) => {
+                  const active = selectedFormats.includes(item.id);
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={active ? "active" : ""}
+                      aria-pressed={active}
+                      onClick={() => toggleOutputFormat(item.id)}
+                      disabled={running}
+                    >
+                      <strong>{item.label}</strong>
+                      <small>{item.detail}</small>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
           <div className="quality-note">{qualityNote}</div>
 
           <div className="section-label">OUTPUT</div>
@@ -1240,7 +1330,7 @@ export default function App() {
           </label>
           <div className="output-preview-line">
             <span>最終名</span>
-            <code>{multiMode ? `各入力名 → ${selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
+            <code>{multiMode ? `各入力名 → ${operation === "vectorize" ? "SVG" : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
           </div>
           {outputPath && <div className="resolved-output" title={outputPath}>保存先: {outputPath}</div>}
           {outputResults.length > 1 && (
@@ -1256,15 +1346,15 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
           {error && <div className="error-box">{error}</div>}
 
           <div className="action-row">
-            <button className="primary" onClick={start} disabled={running || selectedFormats.length === 0 || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
+            <button className="primary" onClick={start} disabled={running || (operation !== "vectorize" && selectedFormats.length === 0) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
+              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>
