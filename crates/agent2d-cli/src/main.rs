@@ -2,12 +2,15 @@ use std::{path::PathBuf, process::ExitCode};
 
 use agent2d_compression::compress_image;
 use agent2d_core::{
-    Agent2DResult, ApiEnvelope, CompressRequest, CompressionMode, CompressionOptions, CustomRequest,
-    InspectRequest, InspectResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION,
+    Agent2DResult, ApiEnvelope, BackgroundRemovalRequest, CompressRequest, CompressionMode,
+    CompressionOptions, CustomRequest, InspectRequest, InspectResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION,
     SuperResolutionMode, SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale,
     VectorizeDetail, VectorizePreset, VectorizeRequest, inspect_image,
 };
-use agent2d_pipeline::{custom_image, optimize_image, vectorize_image};
+use agent2d_pipeline::{
+    BackgroundRuntimeStatus, background_runtime_status, custom_image, install_background_runtime,
+    optimize_image, remove_background, vectorize_image,
+};
 use agent2d_sr::{
     RuntimeStatus, SrCapabilities, capabilities as sr_capabilities, install_runtime,
     runtime_status, upscale_image,
@@ -112,6 +115,15 @@ enum Command {
         #[arg(long)]
         max_bytes: Option<u64>,
     },
+    #[command(about = "Remove the background with FeyNoBg and write a transparent PNG or WebP")]
+    RemoveBg {
+        #[arg(value_name = "IMAGE")]
+        input: PathBuf,
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+        #[arg(long, value_enum, default_value_t = BackgroundFormatArg::Png)]
+        format: BackgroundFormatArg,
+    },
     #[command(about = "Vectorize illustration/logo/line-art raster input into real SVG paths")]
     Vectorize {
         #[arg(value_name = "IMAGE")]
@@ -158,6 +170,25 @@ enum Command {
     RuntimeStatus,
     #[command(about = "Install the pinned official Real-ESRGAN NCNN runtime locally")]
     RuntimeInstall,
+    #[command(about = "Report the managed FeyNoBg background-removal runtime state")]
+    BgRuntimeStatus,
+    #[command(about = "Install the managed FeyNoBg + NoBg + PyTorch runtime locally")]
+    BgRuntimeInstall,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackgroundFormatArg {
+    Png,
+    Webp,
+}
+
+impl From<BackgroundFormatArg> for OutputFormat {
+    fn from(value: BackgroundFormatArg) -> Self {
+        match value {
+            BackgroundFormatArg::Png => OutputFormat::Png,
+            BackgroundFormatArg::Webp => OutputFormat::Webp,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -299,6 +330,7 @@ struct CapabilitiesResult {
     schema_version: &'static str,
     compression: CompressionCapabilities,
     super_resolution: SrCapabilities,
+    background_removal: BackgroundRuntimeStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -499,6 +531,17 @@ fn main() -> ExitCode {
             }
             success(&MultiOutputResult { results }, cli.pretty)
         }
+        Command::RemoveBg { input, output, format } => {
+            let request = BackgroundRemovalRequest {
+                input_path: input,
+                output_path: output,
+                format: format.into(),
+            };
+            match remove_background(&request) {
+                Ok(result) => success(&result, cli.pretty),
+                Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+            }
+        }
         Command::Vectorize {
             input,
             output,
@@ -563,8 +606,8 @@ fn main() -> ExitCode {
             }
             success_outputs(results, cli.pretty)
         }
-        Command::Capabilities => match sr_capabilities() {
-            Ok(super_resolution) => success(
+        Command::Capabilities => match (sr_capabilities(), background_runtime_status()) {
+            (Ok(super_resolution), Ok(background_removal)) => success(
                 &CapabilitiesResult {
                     schema_version: SCHEMA_VERSION,
                     compression: CompressionCapabilities {
@@ -577,10 +620,11 @@ fn main() -> ExitCode {
                             && command_exists("ffprobe"),
                     },
                     super_resolution,
+                    background_removal,
                 },
                 cli.pretty,
             ),
-            Err(error) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
+            (Err(error), _) | (_, Err(error)) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
         },
         Command::RuntimeStatus => match runtime_status() {
             Ok(status) => success(&status, cli.pretty),
@@ -589,6 +633,14 @@ fn main() -> ExitCode {
         Command::RuntimeInstall => match install_runtime() {
             Ok(status) => success(&status, cli.pretty),
             Err(error) => failure::<RuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::BgRuntimeStatus => match background_runtime_status() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<BackgroundRuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::BgRuntimeInstall => match install_background_runtime() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<BackgroundRuntimeStatus>(error.payload(), cli.pretty),
         },
     }
 }

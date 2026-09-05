@@ -72,6 +72,7 @@ dependencies = [
  "agent2d-core",
  "agent2d-sr",
  "image",
+ "serde",
  "tempfile",
  "uuid",
  "vtracer",

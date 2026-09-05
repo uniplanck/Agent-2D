@@ -19,6 +19,14 @@ use uuid::Uuid;
 use vtracer::{ColorImage, Config as VectorConfig, Hierarchical, Preset as VectorPreset};
 use vtracer::progress::CancelToken as VectorCancelToken;
 
+mod background;
+pub use background::{
+    BACKGROUND_MODEL_ID, BACKGROUND_MODEL_REVISION, BACKGROUND_NOBG_VERSION,
+    BACKGROUND_RUNTIME_RELEASE_ID, BACKGROUND_TORCH_VERSION, BackgroundRuntimeStatus,
+    background_runtime_status,
+    install_background_runtime, remove_background, remove_background_with_cancel,
+};
+
 fn crop_geometry(
     input_width: u32,
     input_height: u32,

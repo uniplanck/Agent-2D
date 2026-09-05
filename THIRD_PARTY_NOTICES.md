@@ -47,6 +47,22 @@ Current logical model choices exposed by Agent-2D from the pinned official runti
 
 Model and dataset terms can be more specific than a repository-level software license. Before redistributing model files inside a future installer rather than downloading the official release at user request, perform a release-specific model/license review and include the applicable texts.
 
+## FeyNoBg background-removal model and managed Python runtime
+
+Agent-2D's `Remove BG` operation uses the FeyNoBg model through the upstream NoBg Python library. The application bundle does not vendor the model or Python inference environment. An explicit user install action creates a dedicated runtime under the user's Agent-2D Application Support directory and downloads the dependencies from their normal upstream package/model channels.
+
+- Model: `feyninc/FeyNobg`
+- Pinned model revision: `c1fd67fbefe3efeb78fe2a003270fb5350a0bb1c`
+- Model card/license: Apache-2.0
+- Model distribution: https://huggingface.co/feyninc/FeyNobg
+- Managed model file is approximately 1.05 GB in the current upstream repository.
+- Library: `feyninc/nobg` / PyPI `nobg` `0.3.1`
+- NoBg upstream license: Apache-2.0
+- Repository: https://github.com/feyninc/nobg
+- Inference framework: PyTorch `2.14.0` + TorchVision `0.29.0`
+
+The managed installer downloads these assets only after an explicit install action. Normal background-removal inference is configured with Hugging Face offline mode and runs locally. A future Agent-2D package that redistributes FeyNoBg weights, NoBg/PyTorch wheels, or their transitive Python dependencies must include the applicable license texts, notices, and a complete dependency inventory rather than relying on this engineering summary alone.
+
 ## Tauri and Rust/JavaScript dependencies
 
 Agent-2D Desktop uses Tauri 2, React, Vite, and their dependency graphs. Cargo and npm lockfiles pin the dependency set used to build v0.1. A public binary distribution should generate a complete software-bill-of-materials/license report from those lockfiles before release.

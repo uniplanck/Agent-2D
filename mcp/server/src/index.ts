@@ -39,6 +39,10 @@ const outputFormatsProperty = {
   maxItems: 5,
   uniqueItems: true,
 } as const;
+const backgroundFormatProperty = {
+  type: "string",
+  enum: ["png", "webp"],
+} as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
@@ -129,6 +133,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "agent2d_remove_background",
+      description: "Remove the background with the managed FeyNoBg model and write a transparent PNG or lossless WebP while preserving source pixel dimensions.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          format: backgroundFormatProperty,
+        },
+        required: ["inputPath", "outputPath"],
+        additionalProperties: false,
+      },
+    },
+    {
       name: "agent2d_vectorize",
       description: "Vectorize a raster illustration, logo, icon, or line-art image into real SVG paths. This is not photo super-resolution; photo-like inputs may produce a warning.",
       inputSchema: {
@@ -198,6 +216,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "agent2d_custom":
         result = await runAgent2d(buildCustomArgs(args));
+        break;
+      case "agent2d_remove_background":
+        result = await runAgent2d(buildRemoveBackgroundArgs(args));
         break;
       case "agent2d_vectorize":
         result = await runAgent2d(buildVectorizeArgs(args));
@@ -284,6 +305,16 @@ function buildCustomArgs(args: Record<string, unknown>): string[] {
   command.push("--formats", formats.join(","));
   appendNumber(command, "--max-bytes", args.maxBytes);
   return command;
+}
+
+function buildRemoveBackgroundArgs(args: Record<string, unknown>): string[] {
+  return [
+    "remove-bg",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+    "--format",
+    optionalEnum(args, "format", ["png", "webp"], "png"),
+  ];
 }
 
 function buildVectorizeArgs(args: Record<string, unknown>): string[] {

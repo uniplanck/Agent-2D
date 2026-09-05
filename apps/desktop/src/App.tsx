@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Agent2DResult,
+  BackgroundRuntimeStatus,
   CompressionMode,
   DesktopJobRequest,
   DesktopJobStatus,
@@ -48,6 +49,10 @@ const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }>
   { id: "webp", label: "WebP", detail: "Lossless / Compact" },
   { id: "avif", label: "AVIF", detail: "Preserve / Compact" },
   { id: "jxl", label: "JXL", detail: "Lossless / Compact" },
+];
+const BACKGROUND_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
+  { id: "png", label: "PNG", detail: "Transparent" },
+  { id: "webp", label: "WebP", detail: "Transparent · Lossless" },
 ];
 
 function loadSavedSizePresets(): SavedSizePreset[] {
@@ -255,7 +260,9 @@ function outputFor(input: string, operation: Operation, format: OutputFormat, ba
           ? "resized"
           : operation === "vectorize"
             ? "vectorized"
-            : "optimized";
+            : operation === "remove-bg"
+              ? "transparent"
+              : "optimized";
   const ext = operation === "vectorize" ? "svg" : format === "jpeg" ? "jpg" : format;
   return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
 }
@@ -298,6 +305,7 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
   const compressionMs = 650 + megapixels * 520;
   if (operation === "crop" || operation === "resize") return 850 + megapixels * 620;
   if (operation === "vectorize") return 1_100 + megapixels * 1_850;
+  if (operation === "remove-bg") return 3_500 + megapixels * 2_400;
   if (operation === "compress" || scale === 1) return compressionMs;
   const srMs = scale === 4
     ? 2_800 + megapixels * 12_500
@@ -316,6 +324,7 @@ function stageLabel(stage?: string): string {
     case "crop_to_size": return "Custom書き出し";
     case "resize_to_size": return "指定サイズへ縮小";
     case "vectorize_svg": return "SVGベクター化";
+    case "background_removal_feynobg": return "FeyNoBg 背景透過";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
     case "cancelled": return "キャンセル済み";
@@ -346,6 +355,7 @@ function modeLabel(mode: Operation): string {
   if (mode === "crop") return "Custom";
   if (mode === "resize") return "Resize to Size";
   if (mode === "vectorize") return "Vectorize";
+  if (mode === "remove-bg") return "Remove BG";
   return "Optimize";
 }
 
@@ -415,6 +425,9 @@ export default function App() {
   const [vectorPreset, setVectorPreset] = useState<VectorPreset>("illustration");
   const [vectorDetail, setVectorDetail] = useState<VectorDetail>("balanced");
   const [vectorMaxColors, setVectorMaxColors] = useState(24);
+  const [backgroundRuntime, setBackgroundRuntime] = useState<BackgroundRuntimeStatus | null>(null);
+  const [backgroundRuntimeChecked, setBackgroundRuntimeChecked] = useState(false);
+  const [installingBackgroundRuntime, setInstallingBackgroundRuntime] = useState(false);
   const cancelBatchRef = useRef(false);
   const outputDirectoryPinnedRef = useRef(false);
   const compareStageRef = useRef<HTMLDivElement>(null);
@@ -479,6 +492,30 @@ export default function App() {
     void refreshCapabilities();
   }, [refreshCapabilities]);
 
+  const refreshBackgroundRuntime = useCallback(async () => {
+    try {
+      const next = await invoke<BackgroundRuntimeStatus>("background_runtime_status_command");
+      setBackgroundRuntime(next);
+    } catch {
+      setBackgroundRuntime(null);
+    } finally {
+      setBackgroundRuntimeChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBackgroundRuntime();
+  }, [refreshBackgroundRuntime]);
+
+  useEffect(() => {
+    if (operation !== "remove-bg") return;
+    setSelectedFormats((current) => {
+      const compatible = current.filter((format) => format === "png" || format === "webp");
+      if (compatible.length === 0) return ["png"];
+      return compatible.length === current.length ? current : compatible;
+    });
+  }, [operation]);
+
   useEffect(() => {
     try {
       window.localStorage.setItem(CUSTOM_SIZE_STORAGE_KEY, JSON.stringify(savedSizePresets));
@@ -499,6 +536,21 @@ export default function App() {
       setError(errorText(cause));
     } finally {
       setInstallingRuntime(false);
+    }
+  };
+
+  const installBackgroundRuntime = async () => {
+    if (installingBackgroundRuntime) return;
+    setInstallingBackgroundRuntime(true);
+    setError("");
+    try {
+      const next = await invoke<BackgroundRuntimeStatus>("install_background_runtime_command");
+      setBackgroundRuntime(next);
+      setBackgroundRuntimeChecked(true);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setInstallingBackgroundRuntime(false);
     }
   };
 
@@ -689,7 +741,16 @@ export default function App() {
 
   const start = async () => {
     if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
-    const runFormats: OutputFormat[] = operation === "vectorize" ? ["png"] : selectedFormats;
+    if (operation === "remove-bg" && !backgroundRuntime?.installed) {
+      setError("FeyNoBg runtimeを先にインストールしてください。");
+      return;
+    }
+    const runFormats: OutputFormat[] = operation === "vectorize"
+      ? ["png"]
+      : operation === "remove-bg"
+        ? selectedFormats.filter((format) => format === "png" || format === "webp")
+        : selectedFormats;
+    if (runFormats.length === 0) return;
     setError("");
     setResult(null);
     setOutputResults([]);
@@ -813,6 +874,8 @@ export default function App() {
 
   const qualityNote = operation === "vectorize"
     ? "本物のSVG pathへ変換します。ロゴ・アイコン・線画・フラットイラスト向け。写真や細かな質感主体の画像には非推奨です。"
+    : operation === "remove-bg"
+      ? "FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。"
     : operation === "crop" && customTargetBytes != null
       ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
       : selectedFormats.map(formatQualityText).join(" · ");
@@ -838,7 +901,8 @@ export default function App() {
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
     : operation === "vectorize"
       ? withSvgExtension(outputName)
-      : selectedFormats.map((targetFormat) => withExtension(outputNameForFormat(outputName, targetFormat, selectedFormats.length > 1), targetFormat)).join(" · ");
+      : (operation === "remove-bg" ? selectedFormats.filter((format) => format === "png" || format === "webp") : selectedFormats)
+          .map((targetFormat, _index, formats) => withExtension(outputNameForFormat(outputName, targetFormat, formats.length > 1), targetFormat)).join(" · ");
 
   const updateCompareFromClientX = useCallback((clientX: number) => {
     const rect = compareStageRef.current?.getBoundingClientRect();
@@ -980,10 +1044,10 @@ export default function App() {
       )}
 
       <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize", "crop", "vectorize"] as Operation[]).map((item) => (
+        {(["enhance", "compress", "optimize", "crop", "remove-bg", "vectorize"] as Operation[]).map((item) => (
           <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
             {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : "SVG化 · イラスト/線画"}</small>
+            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : "SVG化 · イラスト/線画"}</small>
           </button>
         ))}
       </section>
@@ -1180,6 +1244,37 @@ export default function App() {
             </>
           )}
 
+          {operation === "remove-bg" && (
+            <>
+              <div className="section-label">BACKGROUND REMOVAL</div>
+              <div className={`background-removal-card ${backgroundRuntime?.installed ? "ready" : "missing"}`}>
+                <div className="background-removal-head">
+                  <div>
+                    <strong>FeyNoBg · High Quality</strong>
+                    <span>foreground segmentation + alpha matting · 1024 inference</span>
+                  </div>
+                  <span className="background-runtime-badge">
+                    {!backgroundRuntimeChecked ? "Checking…" : backgroundRuntime?.installed ? "READY" : "NOT INSTALLED"}
+                  </span>
+                </div>
+                <p>人物・商品・動物・細い輪郭までAIで前景を推定し、透明alphaとして出力します。元画像の縦横サイズは維持します。</p>
+                {backgroundRuntime?.installed ? (
+                  <div className="background-runtime-meta">
+                    <span>{backgroundRuntime.modelId}</span>
+                    <span>NoBg {backgroundRuntime.nobgVersion} · PyTorch {backgroundRuntime.torchVersion}</span>
+                  </div>
+                ) : (
+                  <div className="background-runtime-install">
+                    <span>初回のみ約1GBのモデルとPyTorch runtimeをApplication Supportへ取得します。通常処理は完全ローカルです。</span>
+                    <button type="button" onClick={installBackgroundRuntime} disabled={running || installingBackgroundRuntime}>
+                      {installingBackgroundRuntime ? "Installing FeyNoBg…" : "Install FeyNoBg"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
           {operation === "vectorize" && (
             <>
               <div className="section-label">VECTORIZE TO SVG</div>
@@ -1289,8 +1384,8 @@ export default function App() {
           {operation !== "vectorize" && (
             <>
               <div className="section-label">OUTPUT FORMATS</div>
-              <div className="format-selector" role="group" aria-label="出力形式を複数選択">
-                {OUTPUT_FORMATS.map((item) => {
+              <div className={`format-selector ${operation === "remove-bg" ? "alpha-only" : ""}`} role="group" aria-label="出力形式を複数選択">
+                {(operation === "remove-bg" ? BACKGROUND_OUTPUT_FORMATS : OUTPUT_FORMATS).map((item) => {
                   const active = selectedFormats.includes(item.id);
                   return (
                     <button
@@ -1330,7 +1425,7 @@ export default function App() {
           </label>
           <div className="output-preview-line">
             <span>最終名</span>
-            <code>{multiMode ? `各入力名 → ${operation === "vectorize" ? "SVG" : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
+            <code>{multiMode ? `各入力名 → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
           </div>
           {outputPath && <div className="resolved-output" title={outputPath}>保存先: {outputPath}</div>}
           {outputResults.length > 1 && (
@@ -1346,15 +1441,15 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
           {error && <div className="error-box">{error}</div>}
 
           <div className="action-row">
-            <button className="primary" onClick={start} disabled={running || (operation !== "vectorize" && selectedFormats.length === 0) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
+            <button className="primary" onClick={start} disabled={running || (operation !== "vectorize" && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
+              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>

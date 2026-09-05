@@ -10,12 +10,17 @@ use std::{
 
 use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
-    Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
-    CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult, JobState, OptimizeRequest,
+    Agent2DError, Agent2DResult, BackgroundRemovalRequest, CancellationToken, CompressRequest,
+    CompressionMode, CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult,
+    JobState, OptimizeRequest,
     OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale, VectorizeDetail,
     VectorizePreset, VectorizeRequest, cleanup_output, inspect_image, validate_output_path,
 };
-use agent2d_pipeline::{custom_image_with_cancel, optimize_image_with_cancel, vectorize_image_with_cancel};
+use agent2d_pipeline::{
+    BackgroundRuntimeStatus, background_runtime_status, custom_image_with_cancel,
+    install_background_runtime, optimize_image_with_cancel, remove_background_with_cancel,
+    vectorize_image_with_cancel,
+};
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -33,6 +38,8 @@ enum DesktopOperation {
     Crop,
     Resize,
     Vectorize,
+    #[serde(rename = "remove-bg")]
+    RemoveBg,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -432,6 +439,14 @@ fn execute_job(
             },
             cancellation,
         ),
+        DesktopOperation::RemoveBg => remove_background_with_cancel(
+            &BackgroundRemovalRequest {
+                input_path,
+                output_path,
+                format,
+            },
+            cancellation,
+        ),
     }
 }
 
@@ -464,6 +479,19 @@ fn capabilities_command() -> Result<SrCapabilities, ErrorPayload> {
 fn install_runtime_command() -> Result<SrCapabilities, ErrorPayload> {
     install_runtime()
         .and_then(|_| capabilities())
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+fn background_runtime_status_command() -> Result<BackgroundRuntimeStatus, ErrorPayload> {
+    background_runtime_status().map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn install_background_runtime_command() -> Result<BackgroundRuntimeStatus, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(install_background_runtime)
+        .await
+        .map_err(|error| internal_error(format!("background runtime installer task failed: {error}")))?
         .map_err(|error| error.payload())
 }
 
@@ -633,6 +661,7 @@ fn start_job_command(
                 (DesktopOperation::Crop, _) => "crop_to_size",
                 (DesktopOperation::Resize, _) => "resize_to_size",
                 (DesktopOperation::Vectorize, _) => "vectorize_svg",
+                (DesktopOperation::RemoveBg, _) => "background_removal_feynobg",
             }
             .into();
         });
@@ -709,6 +738,8 @@ pub fn run() {
             inspect_image_command,
             capabilities_command,
             install_runtime_command,
+            background_runtime_status_command,
+            install_background_runtime_command,
             preview_image_command,
             resolve_output_path_command,
             start_job_command,

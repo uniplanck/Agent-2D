@@ -193,6 +193,14 @@ pub struct CustomRequest {
     pub compression: CompressionOptions,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundRemovalRequest {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub format: OutputFormat,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum VectorizePreset {

@@ -1,4 +1,4 @@
-export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize";
+export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize" | "remove-bg";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve" | "compact";
@@ -82,4 +82,18 @@ export interface SrCapabilities {
   backendPath: string;
   modelDir: string;
   models: ModelDescriptor[];
+}
+
+export interface BackgroundRuntimeStatus {
+  installed: boolean;
+  managed: boolean;
+  releaseId: string;
+  root: string;
+  pythonPath: string;
+  runnerPath: string;
+  modelCacheDir: string;
+  modelId: string;
+  modelRevision: string;
+  nobgVersion: string;
+  torchVersion: string;
 }

@@ -34,6 +34,7 @@ try {
     "agent2d_enhance",
     "agent2d_compress",
     "agent2d_custom",
+    "agent2d_remove_background",
     "agent2d_vectorize",
     "agent2d_optimize",
     "agent2d_capabilities",
@@ -47,6 +48,9 @@ try {
   if (capabilityEnvelope.ok !== true) throw new Error("capabilities tool returned failure");
   if (!Array.isArray(capabilityEnvelope.data?.superResolution?.models)) {
     throw new Error("capabilities did not expose SR models");
+  }
+  if (typeof capabilityEnvelope.data?.backgroundRemoval?.installed !== "boolean") {
+    throw new Error("capabilities did not expose background-removal runtime status");
   }
 
   const inspection = await callTool({
@@ -205,6 +209,30 @@ try {
     throw new Error(`unexpected optimize multi-format result ${JSON.stringify(optimizeMultiEnvelope.data)}`);
   }
 
+  let backgroundRemoved = null;
+  if (capabilityEnvelope.data.backgroundRemoval.installed === true) {
+    const backgroundPath = join(temp, "background-removed.png");
+    const background = await callTool({
+      name: "agent2d_remove_background",
+      arguments: { inputPath: vectorInput, outputPath: backgroundPath, format: "png" },
+    });
+    const backgroundEnvelope = parseTextResult(background);
+    assertSuccess(backgroundEnvelope, "remove-background");
+    if (backgroundEnvelope.data?.modelId !== "feyninc/FeyNobg") {
+      throw new Error(`remove-background did not report FeyNoBg: ${JSON.stringify(backgroundEnvelope.data)}`);
+    }
+    const backgroundInspection = await callTool({
+      name: "agent2d_inspect",
+      arguments: { inputPath: backgroundPath },
+    });
+    const backgroundInspectionEnvelope = parseTextResult(backgroundInspection);
+    assertSuccess(backgroundInspectionEnvelope, "inspect-background-removal");
+    if (backgroundInspectionEnvelope.data?.hasAlpha !== true) {
+      throw new Error("background-removal output did not retain alpha");
+    }
+    backgroundRemoved = [backgroundEnvelope.data.outputWidth, backgroundEnvelope.data.outputHeight, backgroundEnvelope.data.codec];
+  }
+
   const vectorPath = join(temp, "vector.svg");
   const vectorized = await callTool({
     name: "agent2d_vectorize",
@@ -257,6 +285,7 @@ try {
       enhanceMulti: enhanceEnvelope.data.results.map((entry) => entry.codec),
       compressMulti: compressMultiEnvelope.data.results.map((entry) => entry.codec),
       custom: customEnvelope.data.results.map((entry) => [entry.codec, entry.outputWidth, entry.outputHeight]),
+      backgroundRemoved,
       vectorized: [vectorEnvelope.data.codec, vectorEnvelope.data.outputWidth, vectorEnvelope.data.outputHeight],
       optimizeMulti: optimizeMultiEnvelope.data.results.map((entry) => entry.codec),
       optimized: [optimizeEnvelope.data.outputWidth, optimizeEnvelope.data.outputHeight],

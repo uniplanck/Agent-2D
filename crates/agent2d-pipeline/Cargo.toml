@@ -10,6 +10,7 @@ agent2d-core = { path = "../agent2d-core" }
 agent2d-compression = { path = "../agent2d-compression" }
 agent2d-sr = { path = "../agent2d-sr" }
 image.workspace = true
+serde.workspace = true
 tempfile = "3"
 uuid.workspace = true
 vtracer.workspace = true

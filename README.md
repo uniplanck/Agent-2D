@@ -2,13 +2,14 @@
 
 Agent-2D is a local-first 2D image optimization engine for macOS Apple Silicon.
 
-The v0.1 product has three primary capability families:
+The v0.1 product has four primary capability families:
 
 - **Super Resolution**: Real-ESRGAN / NCNN / Vulkan based image upscaling.
 - **Super Compression**: exact or preserve-oriented image compression without changing pixel dimensions.
+- **Background Removal**: FeyNoBg foreground extraction + alpha matting with transparent PNG/WebP output.
 - **Vectorize to SVG**: in-process VTracer conversion from raster logos, icons, line art, and flat illustrations into real SVG paths.
 
-Super Resolution and Super Compression can be combined as **Optimize = Super Resolution → Compression**. Vectorization is intentionally separate because it changes the representation from raster pixels to editable vector geometry.
+Super Resolution and Super Compression can be combined as **Optimize = Super Resolution → Compression**. Background removal and vectorization are separate representation-oriented operations and do not silently enter the SR/compression path.
 
 ## Interfaces
 
@@ -73,6 +74,37 @@ AGENT2D_SR_MODEL_DIR
 
 `AGENT2D_RUNTIME_ROOT` can override the parent directory used by the managed installer.
 
+## Managed Background-Removal Runtime
+
+Agent-2D uses `feyninc/FeyNobg` through the upstream `nobg` Python library. The model is not embedded in the application bundle. An explicit install action creates a dedicated Python environment and model cache under:
+
+```text
+~/Library/Application Support/Agent-2D/runtime/feynobg-nobg-0.3.1-torch-2.14.0
+```
+
+Pinned runtime contract:
+
+```text
+model:       feyninc/FeyNobg
+revision:    c1fd67fbefe3efeb78fe2a003270fb5350a0bb1c
+NoBg:        0.3.1
+PyTorch:     2.14.0
+TorchVision: 0.29.0
+```
+
+The installer requires a local Python 3.10+ interpreter for bootstrapping. It downloads Python packages and the FeyNoBg weights only during the explicit install action. Normal inference sets `HF_HUB_OFFLINE=1`, uses Apple MPS when available with a CPU fallback, and does not require a network connection.
+
+CLI management and processing:
+
+```bash
+cargo run -p agent2d-cli -- bg-runtime-status
+cargo run -p agent2d-cli -- bg-runtime-install
+cargo run -p agent2d-cli -- remove-bg input.jpg output.png --format png
+cargo run -p agent2d-cli -- remove-bg input.jpg output.webp --format webp
+```
+
+`AGENT2D_BG_RUNTIME_ROOT` can point to an existing compatible runtime for development/testing, `AGENT2D_BG_BOOTSTRAP_PYTHON` can select the Python used by the installer, and `AGENT2D_BG_DEVICE=auto|mps|cpu` controls inference routing.
+
 ## Desktop
 
 Development bundle:
@@ -97,13 +129,14 @@ Primary Desktop functions:
 - window-wide drag & drop / file picker for PNG, JPEG, WebP, AVIF, and JXL
 - single-image replace mode or multi-image queue mode with sequential batch processing
 - Before / After preview with per-format switching when multiple output formats are produced
-- Enhance / Compress / Optimize / **Custom** / **Vectorize**
+- Enhance / Compress / Optimize / **Custom** / **Remove BG** / **Vectorize**
 - x1 / x2 / x4
 - Custom with target-pixel framing, drag / wheel / keyboard / nudge controls
 - one-click source-size matching plus source-relative 1× / 2× / 4× and editable multiplier sizing
 - reusable custom-size presets with local persistence, hover/dropdown selection, and deletion
 - optional maximum output file-size cap for Custom; lossy formats reduce quality as needed, while PNG fails explicitly when Exact output cannot meet the requested cap
 - multi-format output: choose multiple final formats in one run across Enhance / Compress / Optimize / Custom
+- Remove BG uses FeyNoBg and supports transparent PNG plus lossless transparent WebP, including sequential multi-image processing and the normal Before / After view
 - Enhance uses lossless PNG internally where appropriate but is no longer restricted to PNG as the final format
 - Mode / Model selection with contextual hover guidance and aligned Scale / Mode / Model controls
 - PNG Exact / WebP Lossless / JXL Lossless / AVIF Preserve / JPEG High Quality, plus target-size Compact encoding in Custom
@@ -147,12 +180,13 @@ agent2d_compress
 agent2d_upscale
 agent2d_enhance
 agent2d_custom
+agent2d_remove_background
 agent2d_vectorize
 agent2d_optimize
 agent2d_capabilities
 ```
 
-`agent2d_custom` mirrors Desktop Custom through AI-friendly numeric arguments: `targetWidth`, `targetHeight` or `sourceScale`, `zoom`, normalized `x` / `y` offsets, `formats[]`, and optional `maxBytes`. `agent2d_vectorize` exposes `preset`, `detail`, optional `maxColors`, and optional line-art `threshold`, writing a single SVG. `agent2d_enhance`, `agent2d_compress`, and `agent2d_optimize` accept either legacy `format` or multi-output `formats[]`; existing single-format MCP calls remain valid. Compress/Optimize also accept `targetBytes`, while Enhance accepts `targetBytes` for a capped final encode.
+`agent2d_custom` mirrors Desktop Custom through AI-friendly numeric arguments: `targetWidth`, `targetHeight` or `sourceScale`, `zoom`, normalized `x` / `y` offsets, `formats[]`, and optional `maxBytes`. `agent2d_remove_background` runs the installed FeyNoBg runtime and writes transparent `png` or `webp` output. `agent2d_vectorize` exposes `preset`, `detail`, optional `maxColors`, and optional line-art `threshold`, writing a single SVG. `agent2d_enhance`, `agent2d_compress`, and `agent2d_optimize` accept either legacy `format` or multi-output `formats[]`; existing single-format MCP calls remain valid. Compress/Optimize also accept `targetBytes`, while Enhance accepts `targetBytes` for a capped final encode.
 
 ## Validation
 
@@ -165,12 +199,13 @@ Core quality checks include:
 - 1536×1024 → 3072×2048 M3 Air benchmark
 - Desktop build and app launch
 - real path-based SVG vectorization (no embedded raster image) plus MCP vectorize acceptance
+- FeyNoBg transparent-output verification (dimensions + alpha channel + model identity) when the managed background runtime is installed
 - MCP stdio client acceptance
 
 ## Distribution boundary
 
 The source tree does not vendor Upscayl code or models.
 
-The Real-ESRGAN runtime is downloaded from the official upstream project at user request. Before distributing third-party binaries inside a future installer/package rather than downloading them from upstream, include the applicable upstream license texts and notices. See `THIRD_PARTY_NOTICES.md`.
+The Real-ESRGAN runtime and FeyNoBg model/runtime dependencies are downloaded from their upstream distribution channels only after an explicit user install action. Before distributing third-party binaries, Python packages, or model weights inside a future installer/package rather than downloading them at user request, include the applicable upstream license texts and notices. See `THIRD_PARTY_NOTICES.md`.
 
 The Agent-2D project's own public distribution license has not been declared yet; do not infer one from its dependencies.
