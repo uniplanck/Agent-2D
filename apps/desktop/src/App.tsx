@@ -31,6 +31,13 @@ type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
 type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
 type ObjectTool = "include" | "exclude" | "box" | "pan";
+type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
+type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "operation7" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
+type ShortcutMap = Record<ShortcutAction, string>;
+type UiPreferences = {
+  theme: AppTheme;
+  shortcuts: ShortcutMap;
+};
 type ObjectSelectionSnapshot = {
   points: ObjectPoint[];
   box: ObjectBoxPrompt | null;
@@ -56,6 +63,43 @@ interface FormatComparisonOutput {
 }
 
 const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
+const UI_PREFERENCES_STORAGE_KEY = "agent2d.ui-preferences.v1";
+const OPERATION_ORDER: Operation[] = ["enhance", "compress", "optimize", "crop", "remove-bg", "object-edit", "vectorize"];
+const OPERATION_SHORTCUT_ACTIONS: ShortcutAction[] = ["operation1", "operation2", "operation3", "operation4", "operation5", "operation6", "operation7"];
+const DEFAULT_SHORTCUTS: ShortcutMap = {
+  operation1: "Meta+Digit1",
+  operation2: "Meta+Digit2",
+  operation3: "Meta+Digit3",
+  operation4: "Meta+Digit4",
+  operation5: "Meta+Digit5",
+  operation6: "Meta+Digit6",
+  operation7: "Meta+Digit7",
+  previousOperation: "Meta+BracketLeft",
+  nextOperation: "Meta+BracketRight",
+  openImage: "Meta+KeyO",
+  run: "Meta+Enter",
+  objectUndo: "Meta+KeyZ",
+  settings: "Meta+Comma",
+};
+const THEME_OPTIONS: Array<{ id: AppTheme; name: string; detail: string; swatches: [string, string, string] }> = [
+  { id: "lumiere", name: "Lumière", detail: "明るく端正", swatches: ["#f7f9fc", "#ffffff", "#4f78c9"] },
+  { id: "sorbet", name: "Sorbet", detail: "POPで軽やか", swatches: ["#fff4f7", "#ffdbe6", "#eb7d9e"] },
+  { id: "linen", name: "Linen", detail: "やさしい温もり", swatches: ["#f5efe5", "#fffaf2", "#7d947c"] },
+  { id: "petale", name: "Pétale", detail: "可憐で柔らかい", swatches: ["#fff7fa", "#f7dfe9", "#d7799f"] },
+  { id: "versailles", name: "Versailles", detail: "古典と品格", swatches: ["#f2eadb", "#203858", "#a3833f"] },
+  { id: "nocturne", name: "Nocturne", detail: "落ち着いたダーク", swatches: ["#080b12", "#111a28", "#5e91d3"] },
+  { id: "cosmos", name: "Cosmos", detail: "深宇宙と発光", swatches: ["#050713", "#101735", "#8a78ff"] },
+  { id: "graphite", name: "Graphite", detail: "無彩色ミニマル", swatches: ["#111315", "#1c1f23", "#98a3b2"] },
+];
+const SHORTCUT_ROWS: Array<{ id: ShortcutAction; label: string; detail: string }> = [
+  ...OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${modeLabel(operation)}`, detail: "モードへ直接移動" })),
+  { id: "previousOperation", label: "前のモード", detail: "左隣のタブへ移動" },
+  { id: "nextOperation", label: "次のモード", detail: "右隣のタブへ移動" },
+  { id: "openImage", label: "画像を開く", detail: "ファイル選択を開く" },
+  { id: "run", label: "処理を実行", detail: "現在の設定で開始" },
+  { id: "objectUndo", label: "Object Editを戻す", detail: "選択操作を1段階戻す" },
+  { id: "settings", label: "設定を開く", detail: "Theme / Shortcut設定" },
+];
 const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Exact" },
   { id: "jpeg", label: "JPG", detail: "High Quality" },
@@ -96,6 +140,104 @@ function loadSavedSizePresets(): SavedSizePreset[] {
   } catch {
     return [];
   }
+}
+
+function isAppTheme(value: unknown): value is AppTheme {
+  return THEME_OPTIONS.some((theme) => theme.id === value);
+}
+
+function loadUiPreferences(): UiPreferences {
+  const fallback: UiPreferences = { theme: "lumiere", shortcuts: { ...DEFAULT_SHORTCUTS } };
+  try {
+    const raw = window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<UiPreferences>;
+    const shortcuts = parsed.shortcuts && typeof parsed.shortcuts === "object"
+      ? Object.fromEntries((Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).map((key) => [key, typeof parsed.shortcuts?.[key] === "string" ? parsed.shortcuts[key] : DEFAULT_SHORTCUTS[key]])) as ShortcutMap
+      : { ...DEFAULT_SHORTCUTS };
+    return {
+      theme: isAppTheme(parsed.theme) ? parsed.theme : fallback.theme,
+      shortcuts,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function shortcutFromEvent(event: KeyboardEvent): string {
+  if (["MetaLeft", "MetaRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight", "ShiftLeft", "ShiftRight"].includes(event.code)) return "";
+  const parts: string[] = [];
+  if (event.metaKey) parts.push("Meta");
+  if (event.ctrlKey) parts.push("Control");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  parts.push(event.code || event.key);
+  return parts.join("+");
+}
+
+function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
+  if (!shortcut) return false;
+  const parts = shortcut.split("+");
+  const code = parts.at(-1) ?? "";
+  return event.code === code
+    && event.metaKey === parts.includes("Meta")
+    && event.ctrlKey === parts.includes("Control")
+    && event.altKey === parts.includes("Alt")
+    && event.shiftKey === parts.includes("Shift");
+}
+
+function shortcutDisplay(shortcut: string): string {
+  if (!shortcut) return "未設定";
+  const parts = shortcut.split("+");
+  const code = parts.at(-1) ?? "";
+  const symbol = code.startsWith("Digit") ? code.slice(5)
+    : code.startsWith("Key") ? code.slice(3)
+      : code === "BracketLeft" ? "["
+        : code === "BracketRight" ? "]"
+          : code === "Comma" ? ","
+            : code === "Enter" ? "↵"
+              : code === "Space" ? "Space"
+                : code.replace(/^Arrow/, "");
+  return `${parts.includes("Control") ? "⌃" : ""}${parts.includes("Alt") ? "⌥" : ""}${parts.includes("Shift") ? "⇧" : ""}${parts.includes("Meta") ? "⌘" : ""}${symbol}`;
+}
+
+function ShortcutCaptureButton({ value, label, onChange }: { value: string; label: string; onChange: (value: string) => void }) {
+  const [recording, setRecording] = useState(false);
+
+  useEffect(() => {
+    if (!recording) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(false);
+        return;
+      }
+      if (event.key === "Backspace" || event.key === "Delete") {
+        onChange("");
+        setRecording(false);
+        return;
+      }
+      const next = shortcutFromEvent(event);
+      if (!next) return;
+      onChange(next);
+      setRecording(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [onChange, recording]);
+
+  return (
+    <button
+      type="button"
+      className={`shortcut-capture ${recording ? "recording" : ""}`}
+      data-shortcut-capture-active={recording ? "true" : undefined}
+      aria-label={`${label}のショートカットを編集`}
+      onClick={() => setRecording(true)}
+    >
+      {recording ? "キー入力…" : shortcutDisplay(value)}
+    </button>
+  );
 }
 
 function targetBytesFrom(value: number, unit: "KB" | "MB"): number {
@@ -570,6 +712,8 @@ function delay(ms: number): Promise<void> {
 }
 
 export default function App() {
+  const [uiPreferences, setUiPreferences] = useState<UiPreferences>(loadUiPreferences);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [operation, setOperation] = useState<Operation>("optimize");
   const [inputPath, setInputPath] = useState("");
   const [outputDirectory, setOutputDirectory] = useState("");
@@ -644,6 +788,28 @@ export default function App() {
   const objectDragRef = useRef<{ pointerId: number; mode: "box" | "pan"; startX: number; startY: number; basePanX: number; basePanY: number; startPoint?: { x: number; y: number } } | null>(null);
   const objectUndoStackRef = useRef<ObjectSelectionSnapshot[]>([]);
   const objectMaskRequestRef = useRef(0);
+
+  useEffect(() => {
+    document.documentElement.dataset.agent2dTheme = uiPreferences.theme;
+    try {
+      window.localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify(uiPreferences));
+    } catch {
+      // UI preferences are optional; image processing must stay usable.
+    }
+  }, [uiPreferences]);
+
+  const assignShortcut = useCallback((action: ShortcutAction, shortcut: string) => {
+    setUiPreferences((current) => {
+      const next = { ...current.shortcuts };
+      if (shortcut) {
+        (Object.keys(next) as ShortcutAction[]).forEach((key) => {
+          if (key !== action && next[key] === shortcut) next[key] = "";
+        });
+      }
+      next[action] = shortcut;
+      return { ...current, shortcuts: next };
+    });
+  }, []);
 
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
@@ -863,20 +1029,6 @@ export default function App() {
     setObjectMaskScore(null);
     setObjectMaskLoading(false);
   }, []);
-
-  useEffect(() => {
-    if (operation !== "object-edit") return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
-      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z" && objectUndoStackRef.current.length > 0) {
-        event.preventDefault();
-        undoObjectSelection();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [operation, undoObjectSelection]);
 
   const refreshObjectMask = useCallback(async (selection: ObjectSelection, requestId: number) => {
     if (!inputPath || !objectRuntime?.installed || (selection.points.length === 0 && !selection.boxPrompt)) return;
@@ -1567,6 +1719,60 @@ export default function App() {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !document.querySelector('[data-shortcut-capture-active="true"]')) setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('[data-shortcut-capture-active="true"]')) return;
+      const shortcuts = uiPreferences.shortcuts;
+      if (matchesShortcut(event, shortcuts.settings)) {
+        event.preventDefault();
+        setSettingsOpen((value) => !value);
+        return;
+      }
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+
+      const directIndex = OPERATION_SHORTCUT_ACTIONS.findIndex((action) => matchesShortcut(event, shortcuts[action]));
+      if (directIndex >= 0) {
+        event.preventDefault();
+        if (!running) setOperation(OPERATION_ORDER[directIndex]);
+        return;
+      }
+      if (matchesShortcut(event, shortcuts.previousOperation) || matchesShortcut(event, shortcuts.nextOperation)) {
+        event.preventDefault();
+        if (running) return;
+        const current = Math.max(0, OPERATION_ORDER.indexOf(operation));
+        const delta = matchesShortcut(event, shortcuts.previousOperation) ? -1 : 1;
+        setOperation(OPERATION_ORDER[(current + delta + OPERATION_ORDER.length) % OPERATION_ORDER.length]);
+        return;
+      }
+      if (matchesShortcut(event, shortcuts.openImage)) {
+        event.preventDefault();
+        if (!running) void openImage();
+        return;
+      }
+      if (matchesShortcut(event, shortcuts.run)) {
+        event.preventDefault();
+        if (!running) void start();
+        return;
+      }
+      if (matchesShortcut(event, shortcuts.objectUndo) && operation === "object-edit" && objectUndoStackRef.current.length > 0) {
+        event.preventDefault();
+        undoObjectSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [openImage, operation, running, start, uiPreferences.shortcuts, undoObjectSelection]);
+
   return (
     <main className={`app-shell mode-${operation} ${dragActive ? "dragging" : ""}`}>
       {dragActive && (
@@ -1579,6 +1785,59 @@ export default function App() {
         </div>
       )}
 
+      {settingsOpen && createPortal(
+        <div className="settings-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
+          <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="Agent-2D 設定" onMouseDown={(event) => event.stopPropagation()}>
+            <header className="settings-header">
+              <div>
+                <span>SETTINGS</span>
+                <strong>外観とショートカット</strong>
+              </div>
+              <button type="button" className="settings-close" onClick={() => setSettingsOpen(false)}>閉じる</button>
+            </header>
+            <div className="settings-scroll">
+              <section className="settings-section">
+                <div className="settings-section-head">
+                  <div><strong>Theme</strong><small>作業内容は変えず、色・素材感・コントラストだけを切り替えます。</small></div>
+                </div>
+                <div className="theme-grid">
+                  {THEME_OPTIONS.map((theme) => (
+                    <button
+                      key={theme.id}
+                      type="button"
+                      className={uiPreferences.theme === theme.id ? "active" : ""}
+                      aria-pressed={uiPreferences.theme === theme.id}
+                      onClick={() => setUiPreferences((current) => ({ ...current, theme: theme.id }))}
+                    >
+                      <span className="theme-swatches" aria-hidden="true">
+                        {theme.swatches.map((color) => <i key={color} style={{ background: color }} />)}
+                      </span>
+                      <span className="theme-copy"><strong>{theme.name}</strong><small>{theme.detail}</small></span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head shortcut-head">
+                  <div><strong>Keyboard Shortcuts</strong><small>キー欄を押して新しい組み合わせを入力。Delete / Backspaceで解除できます。</small></div>
+                  <button type="button" onClick={() => setUiPreferences((current) => ({ ...current, shortcuts: { ...DEFAULT_SHORTCUTS } }))}>初期値へ戻す</button>
+                </div>
+                <div className="shortcut-list">
+                  {SHORTCUT_ROWS.map((item) => (
+                    <div className="shortcut-row" key={item.id}>
+                      <div><strong>{item.label}</strong><small>{item.detail}</small></div>
+                      <ShortcutCaptureButton value={uiPreferences.shortcuts[item.id]} label={item.label} onChange={(value) => assignShortcut(item.id, value)} />
+                    </div>
+                  ))}
+                </div>
+                <p className="shortcut-note">同じキーを別操作へ割り当てた場合は、以前の割り当てを自動で解除します。入力欄へ文字を入力中は、設定を開く操作以外のショートカットを無効化します。</p>
+              </section>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+
       {runtimeChecked && !capabilities && (
         <div className="runtime-alert">
           <span>Real-ESRGAN runtime未導入</span>
@@ -1588,14 +1847,20 @@ export default function App() {
         </div>
       )}
 
-      <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize", "crop", "remove-bg", "object-edit", "vectorize"] as Operation[]).map((item) => (
-          <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
-            {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : item === "object-edit" ? "クリック選択・削除" : "SVG化 · イラスト/線画"}</small>
-          </button>
-        ))}
-      </section>
+      <div className="app-navigation">
+        <section className="mode-tabs" aria-label="Operation">
+          {OPERATION_ORDER.map((item, index) => (
+            <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]])} · ${modeLabel(item)}`}>
+              {modeLabel(item)}
+              <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : item === "object-edit" ? "クリック選択・削除" : "SVG化 · イラスト/線画"}</small>
+            </button>
+          ))}
+        </section>
+        <button type="button" className="settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="外観とショートカット設定">
+          <strong>設定</strong>
+          <small>{shortcutDisplay(uiPreferences.shortcuts.settings)}</small>
+        </button>
+      </div>
 
       <section className="workspace-grid">
         <aside className="control-panel">
@@ -1816,9 +2081,10 @@ export default function App() {
               </div>
               <div className="object-control-card">
                 <div className="object-quick-guide">
-                  <strong>まず対象をクリック</strong>
-                  <span>⌥クリックで除外 · ⇧ドラッグで範囲 · ⌘Zで戻す</span>
+                  <strong>{inputPath ? "対象をクリックして選択" : "まず画像を読み込む"}</strong>
+                  <span>{inputPath ? `${shortcutDisplay(uiPreferences.shortcuts.objectUndo)}で戻す · ⌥クリックで除外 · ⇧ドラッグで範囲` : "SOURCEへドロップするか、画像選択ボタンから開始できます。"}</span>
                 </div>
+                {inputPath && <>
                 <div className="object-mask-adjust">
                   <div><span>Mask範囲</span><strong>{objectExpand > 0 ? `+${objectExpand}` : objectExpand}px</strong></div>
                   <div className="crop-zoom-row">
@@ -1841,6 +2107,7 @@ export default function App() {
                   <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す ⌘Z</button>
                   <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>リセット</button>
                 </div>
+                </>}
               </div>
             </>
           )}
@@ -2083,15 +2350,25 @@ export default function App() {
           ) : operation === "object-edit" ? (
             <figure className="object-edit-card">
               <figcaption>
-                <div><span className="before-label">対象を選択</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div><span className="before-label">{inputPreview ? "対象を選択" : "PREVIEW"}</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
                 <div className="object-view-controls">
-                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value - 0.2, 1, 6))} disabled={running}>−</button>
+                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value - 0.2, 1, 6))} disabled={running || !inputPreview}>−</button>
                   <strong>{objectZoom.toFixed(1)}×</strong>
-                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running}>＋</button>
-                  <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running}>Fit</button>
+                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running || !inputPreview}>＋</button>
+                  <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running || !inputPreview}>Fit</button>
                 </div>
-                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{objectMaskLoading ? "選択中…" : objectMaskPreview ? "選択済み" : "対象をクリック"}</span></div>
+                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{!inputPreview ? "画像未選択" : objectMaskLoading ? "選択中…" : objectMaskPreview ? "選択済み" : "クリックで選択"}</span></div>
               </figcaption>
+              {inputPreview && (
+                <div className="object-canvas-toolbar object-canvas-toolbar-docked" role="group" aria-label="Object selection tool">
+                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 選択</button>
+                  <button type="button" title="対象から除外。Option+クリックでも使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
+                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
+                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>移動</button>
+                  <i aria-hidden="true" />
+                  <button type="button" className="utility" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す</button>
+                </div>
+              )}
               <div
                 ref={objectStageRef}
                 className={`object-edit-stage tool-${objectTool}`}
@@ -2103,14 +2380,6 @@ export default function App() {
                 onPointerCancel={endObjectPointer}
                 onWheel={handleObjectWheel}
               >
-                <div className="object-canvas-toolbar" role="group" aria-label="Object selection tool" onPointerDown={(event) => event.stopPropagation()}>
-                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 選択</button>
-                  <button type="button" title="対象から除外。Option+クリックでも使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
-                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
-                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>✋ 移動</button>
-                  <i aria-hidden="true" />
-                  <button type="button" className="utility" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す</button>
-                </div>
                 {inputPreview && inputInfo && objectMediaStyle ? (
                   <div ref={objectMediaRef} className="object-media-frame" style={objectMediaStyle}>
                     <img src={inputPreview} alt="Object edit source" draggable={false} />
@@ -2140,14 +2409,23 @@ export default function App() {
                       }} aria-hidden="true" />;
                     })()}
                   </div>
-                ) : <div className="empty-preview">Drop an image anywhere</div>}
+                ) : (
+                  <div className="canvas-empty-state" onPointerDown={(event) => event.stopPropagation()}>
+                    <span className="canvas-empty-mark" aria-hidden="true">＋</span>
+                    <strong>画像を読み込んでください</strong>
+                    <small>左のSOURCEへドロップ、またはここから選択できます。</small>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); void openImage(); }} disabled={running}>画像を選択</button>
+                  </div>
+                )}
                 {objectMaskLoading && <div className="object-mask-loading">SAM 2.1 selecting…</div>}
               </div>
-              <div className="object-helpbar">
-                <span>クリック 選択 · ⌥ 除外 · ⇧ドラッグ 範囲 · ⌘Z 戻す</span>
-                <span>Wheel Zoom · 中ドラッグ 移動</span>
-                {displayOutputPreview && <span className="object-result-ready">処理結果あり · {objectAction === "remove-and-fill" ? "背景補完" : "透明化"}</span>}
-              </div>
+              {inputPreview && (
+                <div className="object-helpbar">
+                  <span>クリック 選択 · ⌥ 除外 · ⇧ドラッグ 範囲 · {shortcutDisplay(uiPreferences.shortcuts.objectUndo)} 戻す</span>
+                  <span>Wheel Zoom · 中ドラッグ 移動</span>
+                  {displayOutputPreview && <span className="object-result-ready">処理結果あり · {objectAction === "remove-and-fill" ? "背景補完" : "透明化"}</span>}
+                </div>
+              )}
               {displayOutputPreview && (
                 <div className="object-result-preview">
                   <span>RESULT</span>
