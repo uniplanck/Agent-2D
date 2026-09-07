@@ -1407,7 +1407,7 @@ export default function App() {
   };
 
   return (
-    <main className={`app-shell ${dragActive ? "dragging" : ""}`}>
+    <main className={`app-shell mode-${operation} ${dragActive ? "dragging" : ""}`}>
       {dragActive && (
         <div className="drag-overlay" aria-hidden="true">
           <div className="drag-overlay-card">
@@ -1668,7 +1668,10 @@ export default function App() {
                   <span className="background-runtime-badge">{!objectRuntimeChecked ? "Checking…" : objectRuntimeWarming ? "WARMING…" : objectRuntime?.installed ? "READY" : "NOT INSTALLED"}</span>
                 </div>
                 {objectRuntime?.installed ? (
-                  <div className="background-runtime-meta"><span>{objectRuntime.samModelId}</span><span>LaMa · shared PyTorch runtime</span></div>
+                  <details className="object-runtime-details">
+                    <summary>技術情報</summary>
+                    <div className="background-runtime-meta"><span>{objectRuntime.samModelId}</span><span>LaMa · shared PyTorch runtime</span></div>
+                  </details>
                 ) : (
                   <div className="background-runtime-install">
                     <span>初回のみSAM 2.1 Base+とBig-LaMaを取得。既存FeyNoBgのPyTorch runtimeを再利用します。</span>
@@ -1680,12 +1683,6 @@ export default function App() {
                 <div className="object-quick-guide">
                   <strong>まず対象をクリック</strong>
                   <span>⌥クリックで除外 · ⇧ドラッグで範囲 · ⌘Zで戻す</span>
-                </div>
-                <div className="object-tool-row" role="group" aria-label="Object selection tool">
-                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 対象</button>
-                  <button type="button" title="対象から除外。Option+クリックでも一時的に使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
-                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
-                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>✋ 移動</button>
                 </div>
                 <div className="object-mask-adjust">
                   <div><span>Mask範囲</span><strong>{objectExpand > 0 ? `+${objectExpand}` : objectExpand}px</strong></div>
@@ -1705,7 +1702,7 @@ export default function App() {
                   <span>＋ {objectPoints.filter((point) => point.label === "include").length}</span>
                   <span>− {objectPoints.filter((point) => point.label === "exclude").length}</span>
                   <span>Box {objectBox ? "1" : "0"}</span>
-                  <span>{objectMaskLoading ? "AI更新中… 続けてクリック可" : objectMaskScore != null ? `Score ${objectMaskScore.toFixed(3)}` : "対象をクリック"}</span>
+                  <span title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}>{objectMaskLoading ? "AI更新中… 続けてクリック可" : objectMaskPreview ? "選択済み" : "対象をクリック"}</span>
                   <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す ⌘Z</button>
                   <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>リセット</button>
                 </div>
@@ -1951,14 +1948,14 @@ export default function App() {
           ) : operation === "object-edit" ? (
             <figure className="object-edit-card">
               <figcaption>
-                <div><span className="before-label">OBJECT SELECT</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div><span className="before-label">対象を選択</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
                 <div className="object-view-controls">
                   <button type="button" onClick={() => setObjectZoom((value) => clamp(value - 0.2, 1, 6))} disabled={running}>−</button>
                   <strong>{objectZoom.toFixed(1)}×</strong>
                   <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running}>＋</button>
                   <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running}>Fit</button>
                 </div>
-                <div><span className="after-label">{objectMaskLoading ? "SELECTING…" : objectMaskPreview ? "MASK READY" : "CLICK OBJECT"}</span>{objectMaskScore != null && <b>{objectMaskScore.toFixed(3)}</b>}</div>
+                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{objectMaskLoading ? "選択中…" : objectMaskPreview ? "選択済み" : "対象をクリック"}</span></div>
               </figcaption>
               <div
                 ref={objectStageRef}
@@ -1971,6 +1968,14 @@ export default function App() {
                 onPointerCancel={endObjectPointer}
                 onWheel={handleObjectWheel}
               >
+                <div className="object-canvas-toolbar" role="group" aria-label="Object selection tool" onPointerDown={(event) => event.stopPropagation()}>
+                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 選択</button>
+                  <button type="button" title="対象から除外。Option+クリックでも使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
+                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
+                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>✋ 移動</button>
+                  <i aria-hidden="true" />
+                  <button type="button" className="utility" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す</button>
+                </div>
                 {inputPreview && inputInfo && objectMediaStyle ? (
                   <div ref={objectMediaRef} className="object-media-frame" style={objectMediaStyle}>
                     <img src={inputPreview} alt="Object edit source" draggable={false} />
@@ -2004,9 +2009,9 @@ export default function App() {
                 {objectMaskLoading && <div className="object-mask-loading">SAM 2.1 selecting…</div>}
               </div>
               <div className="object-helpbar">
-                <span>クリック=対象 · ⌥クリック=除外 · ⇧ドラッグ=範囲 · ⌘Z=戻す</span>
-                <span>移動+drag / 中ボタン=Pan · Wheel=カーソル位置でZoom · Mask ±=範囲調整</span>
-                {displayOutputPreview && <span className="object-result-ready">RESULT READY · {objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}</span>}
+                <span>クリック 選択 · ⌥ 除外 · ⇧ドラッグ 範囲 · ⌘Z 戻す</span>
+                <span>Wheel Zoom · 中ドラッグ 移動</span>
+                {displayOutputPreview && <span className="object-result-ready">処理結果あり · {objectAction === "remove-and-fill" ? "背景補完" : "透明化"}</span>}
               </div>
               {displayOutputPreview && (
                 <div className="object-result-preview">
@@ -2095,13 +2100,15 @@ export default function App() {
           </figure>
           )}
 
-          <div className="result-strip">
-            <div><span>INPUT</span><strong>{bytes(displayResult?.inputBytes ?? inputInfo?.inputBytes)}</strong></div>
-            <div><span>OUTPUT</span><strong>{bytes(displayResult?.outputBytes)}</strong></div>
-            <div><span>SIZE CHANGE</span><strong>{savings == null ? "—" : `${savings >= 0 ? "−" : "+"}${Math.abs(savings).toFixed(1)}%`}</strong></div>
-            <div><span>TIME</span><strong>{displayResult ? `${(displayResult.elapsedMs / 1000).toFixed(2)}s` : "—"}</strong></div>
-            <div><span>VERIFY</span><strong>{displayResult?.pixelExact === true ? "PIXEL EXACT" : displayResult ? "PASS" : "—"}</strong></div>
-          </div>
+          {displayResult && (
+            <div className="result-strip">
+              <div><span>INPUT</span><strong>{bytes(displayResult.inputBytes)}</strong></div>
+              <div><span>OUTPUT</span><strong>{bytes(displayResult.outputBytes)}</strong></div>
+              <div><span>SIZE CHANGE</span><strong>{savings == null ? "—" : `${savings >= 0 ? "−" : "+"}${Math.abs(savings).toFixed(1)}%`}</strong></div>
+              <div><span>TIME</span><strong>{`${(displayResult.elapsedMs / 1000).toFixed(2)}s`}</strong></div>
+              <div><span>VERIFY</span><strong>{displayResult.pixelExact === true ? "PIXEL EXACT" : "PASS"}</strong></div>
+            </div>
+          )}
 
           {displayResult?.warnings?.length ? (
             <div className="warning-row">{displayResult.warnings.map((warning) => <span key={warning}>{warning.replaceAll("_", " ")}</span>)}</div>
