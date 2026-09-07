@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -32,10 +33,13 @@ type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
 type ObjectTool = "include" | "exclude" | "box" | "pan";
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
+type AppLanguage = "system" | "ja" | "en";
+type ResolvedLanguage = Exclude<AppLanguage, "system">;
 type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "operation7" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
 type ShortcutMap = Record<ShortcutAction, string>;
 type UiPreferences = {
   theme: AppTheme;
+  language: AppLanguage;
   shortcuts: ShortcutMap;
 };
 type ObjectSelectionSnapshot = {
@@ -81,25 +85,87 @@ const DEFAULT_SHORTCUTS: ShortcutMap = {
   objectUndo: "Meta+KeyZ",
   settings: "Meta+Comma",
 };
-const THEME_OPTIONS: Array<{ id: AppTheme; name: string; detail: string; swatches: [string, string, string] }> = [
-  { id: "lumiere", name: "Lumière", detail: "明るく端正", swatches: ["#f7f9fc", "#ffffff", "#4f78c9"] },
-  { id: "sorbet", name: "Sorbet", detail: "POPで軽やか", swatches: ["#fff4f7", "#ffdbe6", "#eb7d9e"] },
-  { id: "linen", name: "Linen", detail: "やさしい温もり", swatches: ["#f5efe5", "#fffaf2", "#7d947c"] },
-  { id: "petale", name: "Pétale", detail: "可憐で柔らかい", swatches: ["#fff7fa", "#f7dfe9", "#d7799f"] },
-  { id: "versailles", name: "Versailles", detail: "古典と品格", swatches: ["#f2eadb", "#203858", "#a3833f"] },
-  { id: "nocturne", name: "Nocturne", detail: "落ち着いたダーク", swatches: ["#080b12", "#111a28", "#5e91d3"] },
-  { id: "cosmos", name: "Cosmos", detail: "深宇宙と発光", swatches: ["#050713", "#101735", "#8a78ff"] },
-  { id: "graphite", name: "Graphite", detail: "無彩色ミニマル", swatches: ["#111315", "#1c1f23", "#98a3b2"] },
+const THEME_OPTIONS: Array<{ id: AppTheme; name: string; detailJa: string; detailEn: string; swatches: [string, string, string] }> = [
+  { id: "lumiere", name: "Lumière", detailJa: "明るく端正", detailEn: "Bright and refined", swatches: ["#f7f9fc", "#ffffff", "#3e66b5"] },
+  { id: "sorbet", name: "Sorbet", detailJa: "POPで軽やか", detailEn: "Playful and airy", swatches: ["#fff4f7", "#ffdbe6", "#bc4d70"] },
+  { id: "linen", name: "Linen", detailJa: "やさしい温もり", detailEn: "Soft and warm", swatches: ["#f5efe5", "#fffaf2", "#56705a"] },
+  { id: "petale", name: "Pétale", detailJa: "可憐で柔らかい", detailEn: "Delicate and gentle", swatches: ["#fff7fa", "#f7dfe9", "#b6557c"] },
+  { id: "versailles", name: "Versailles", detailJa: "古典と品格", detailEn: "Classical elegance", swatches: ["#f2eadb", "#203858", "#7a5e25"] },
+  { id: "nocturne", name: "Nocturne", detailJa: "落ち着いたダーク", detailEn: "Calm dark", swatches: ["#080b12", "#111a28", "#5e91d3"] },
+  { id: "cosmos", name: "Cosmos", detailJa: "深宇宙と発光", detailEn: "Deep space glow", swatches: ["#050713", "#101735", "#8a78ff"] },
+  { id: "graphite", name: "Graphite", detailJa: "無彩色ミニマル", detailEn: "Neutral minimal", swatches: ["#111315", "#1c1f23", "#98a3b2"] },
 ];
-const SHORTCUT_ROWS: Array<{ id: ShortcutAction; label: string; detail: string }> = [
-  ...OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${modeLabel(operation)}`, detail: "モードへ直接移動" })),
-  { id: "previousOperation", label: "前のモード", detail: "左隣のタブへ移動" },
-  { id: "nextOperation", label: "次のモード", detail: "右隣のタブへ移動" },
-  { id: "openImage", label: "画像を開く", detail: "ファイル選択を開く" },
-  { id: "run", label: "処理を実行", detail: "現在の設定で開始" },
-  { id: "objectUndo", label: "Object Editを戻す", detail: "選択操作を1段階戻す" },
-  { id: "settings", label: "設定を開く", detail: "Theme / Shortcut設定" },
+const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string; detailJa: string; detailEn: string }> = [
+  { id: "system", label: "System", detailJa: "macOSの言語に合わせる", detailEn: "Follow macOS language" },
+  { id: "ja", label: "日本語", detailJa: "日本語で表示", detailEn: "Display in Japanese" },
+  { id: "en", label: "English", detailJa: "英語で表示", detailEn: "Display in English" },
 ];
+const UI_COPY = {
+  ja: {
+    settingsTitle: "設定",
+    settingsSubtitle: "外観・言語・ショートカット",
+    language: "言語",
+    languageDetail: "Systemを選ぶとmacOSの表示言語に合わせます。",
+    theme: "Theme",
+    themeDetail: "作業内容は変えず、色・素材感・コントラストだけを切り替えます。",
+    shortcuts: "Keyboard Shortcuts",
+    shortcutsDetail: "キー欄を押して新しい組み合わせを入力。Delete / Backspaceで解除できます。",
+    reset: "初期値へ戻す",
+    close: "閉じる",
+    single: "1枚",
+    multiple: "複数選択",
+    batchInput: "入力モード",
+    loadImage: "画像を読み込んでください",
+    loadImages: "複数画像を読み込んでください",
+    loadHint: "ここへドロップ、またはボタンから画像を選択できます。",
+    loadHintMultiple: "複数画像をまとめてドロップ、またはボタンから選択できます。",
+    selectImage: "画像を選択",
+    selectImages: "複数画像を選択",
+    clear: "クリア",
+    imageNotSelected: "画像未選択",
+    saveFolder: "保存先フォルダ",
+    notSelected: "未選択",
+    fileName: "ファイル名",
+    finalName: "最終名",
+    objectLoadFirst: "まず画像を読み込む",
+    objectSelect: "対象をクリックして選択",
+    selected: "選択済み",
+    selectTarget: "対象をクリック",
+    shortcutConflict: "同じキーを別操作へ割り当てた場合は、以前の割り当てを自動で解除します。入力欄へ文字を入力中は、設定を開く操作以外のショートカットを無効化します。",
+  },
+  en: {
+    settingsTitle: "Settings",
+    settingsSubtitle: "Appearance, language & shortcuts",
+    language: "Language",
+    languageDetail: "System follows the display language configured in macOS.",
+    theme: "Theme",
+    themeDetail: "Change color, material feel and contrast without changing the workflow.",
+    shortcuts: "Keyboard Shortcuts",
+    shortcutsDetail: "Click a key field and press a new combination. Delete / Backspace clears it.",
+    reset: "Reset defaults",
+    close: "Close",
+    single: "Single",
+    multiple: "Multiple",
+    batchInput: "Input mode",
+    loadImage: "Load an image",
+    loadImages: "Load multiple images",
+    loadHint: "Drop an image here, or choose one with the button below.",
+    loadHintMultiple: "Drop multiple images here, or choose them with the button below.",
+    selectImage: "Choose image",
+    selectImages: "Choose images",
+    clear: "Clear",
+    imageNotSelected: "No image selected",
+    saveFolder: "Destination folder",
+    notSelected: "Not selected",
+    fileName: "File name",
+    finalName: "Final name",
+    objectLoadFirst: "Load an image first",
+    objectSelect: "Click an object to select",
+    selected: "Selected",
+    selectTarget: "Click an object",
+    shortcutConflict: "If the same shortcut is assigned twice, the previous assignment is cleared automatically. Most shortcuts are disabled while typing in a field.",
+  },
+} as const;
 const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Exact" },
   { id: "jpeg", label: "JPG", detail: "High Quality" },
@@ -146,8 +212,49 @@ function isAppTheme(value: unknown): value is AppTheme {
   return THEME_OPTIONS.some((theme) => theme.id === value);
 }
 
+function isAppLanguage(value: unknown): value is AppLanguage {
+  return value === "system" || value === "ja" || value === "en";
+}
+
+function resolveLanguage(language: AppLanguage): ResolvedLanguage {
+  if (language !== "system") return language;
+  return navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en";
+}
+
+function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; label: string; detail: string }> {
+  const ja = language === "ja";
+  return [
+    ...OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${modeLabel(operation)}`, detail: ja ? "モードへ直接移動" : "Jump directly to this mode" })),
+    { id: "previousOperation", label: ja ? "前のモード" : "Previous mode", detail: ja ? "左隣のタブへ移動" : "Move to the tab on the left" },
+    { id: "nextOperation", label: ja ? "次のモード" : "Next mode", detail: ja ? "右隣のタブへ移動" : "Move to the tab on the right" },
+    { id: "openImage", label: ja ? "画像を開く" : "Open image", detail: ja ? "ファイル選択を開く" : "Open the image picker" },
+    { id: "run", label: ja ? "処理を実行" : "Run", detail: ja ? "現在の設定で開始" : "Start with the current settings" },
+    { id: "objectUndo", label: ja ? "Object Editを戻す" : "Undo Object Edit", detail: ja ? "選択操作を1段階戻す" : "Undo one selection step" },
+    { id: "settings", label: ja ? "設定を開く" : "Open Settings", detail: ja ? "Theme / Shortcut設定" : "Appearance / shortcut settings" },
+  ];
+}
+
+function operationSubtitle(operation: Operation, language: ResolvedLanguage): string {
+  if (language === "en") {
+    if (operation === "enhance") return "AI upscaling";
+    if (operation === "compress") return "Compress & convert";
+    if (operation === "optimize") return "Upscale + compress";
+    if (operation === "crop") return "Size, crop & target";
+    if (operation === "remove-bg") return "AI background removal";
+    if (operation === "object-edit") return "Select & remove objects";
+    return "SVG · illustration / line art";
+  }
+  return operation === "enhance" ? "AI超解像"
+    : operation === "compress" ? "超圧縮・変換"
+      : operation === "optimize" ? "超解像 + 圧縮"
+        : operation === "crop" ? "サイズ・構図・容量"
+          : operation === "remove-bg" ? "AI背景透過"
+            : operation === "object-edit" ? "クリック選択・削除"
+              : "SVG化 · イラスト/線画";
+}
+
 function loadUiPreferences(): UiPreferences {
-  const fallback: UiPreferences = { theme: "lumiere", shortcuts: { ...DEFAULT_SHORTCUTS } };
+  const fallback: UiPreferences = { theme: "lumiere", language: "system", shortcuts: { ...DEFAULT_SHORTCUTS } };
   try {
     const raw = window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY);
     if (!raw) return fallback;
@@ -157,6 +264,7 @@ function loadUiPreferences(): UiPreferences {
       : { ...DEFAULT_SHORTCUTS };
     return {
       theme: isAppTheme(parsed.theme) ? parsed.theme : fallback.theme,
+      language: isAppLanguage(parsed.language) ? parsed.language : fallback.language,
       shortcuts,
     };
   } catch {
@@ -201,7 +309,7 @@ function shortcutDisplay(shortcut: string): string {
   return `${parts.includes("Control") ? "⌃" : ""}${parts.includes("Alt") ? "⌥" : ""}${parts.includes("Shift") ? "⇧" : ""}${parts.includes("Meta") ? "⌘" : ""}${symbol}`;
 }
 
-function ShortcutCaptureButton({ value, label, onChange }: { value: string; label: string; onChange: (value: string) => void }) {
+function ShortcutCaptureButton({ value, label, language, onChange }: { value: string; label: string; language: ResolvedLanguage; onChange: (value: string) => void }) {
   const [recording, setRecording] = useState(false);
 
   useEffect(() => {
@@ -232,10 +340,10 @@ function ShortcutCaptureButton({ value, label, onChange }: { value: string; labe
       type="button"
       className={`shortcut-capture ${recording ? "recording" : ""}`}
       data-shortcut-capture-active={recording ? "true" : undefined}
-      aria-label={`${label}のショートカットを編集`}
+      aria-label={language === "ja" ? `${label}のショートカットを編集` : `Edit ${label} shortcut`}
       onClick={() => setRecording(true)}
     >
-      {recording ? "キー入力…" : shortcutDisplay(value)}
+      {recording ? (language === "ja" ? "キー入力…" : "Press keys…") : (value ? shortcutDisplay(value) : language === "ja" ? "未設定" : "Unassigned")}
     </button>
   );
 }
@@ -714,6 +822,10 @@ function delay(ms: number): Promise<void> {
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(loadUiPreferences);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const uiLanguage = resolveLanguage(uiPreferences.language);
+  const copy = UI_COPY[uiLanguage];
+  const tr = useCallback((ja: string, en: string) => (uiLanguage === "ja" ? ja : en), [uiLanguage]);
+  const currentShortcutRows = useMemo(() => shortcutRows(uiLanguage), [uiLanguage]);
   const [operation, setOperation] = useState<Operation>("optimize");
   const [inputPath, setInputPath] = useState("");
   const [outputDirectory, setOutputDirectory] = useState("");
@@ -791,12 +903,28 @@ export default function App() {
 
   useEffect(() => {
     document.documentElement.dataset.agent2dTheme = uiPreferences.theme;
+    document.documentElement.lang = uiLanguage;
     try {
       window.localStorage.setItem(UI_PREFERENCES_STORAGE_KEY, JSON.stringify(uiPreferences));
     } catch {
       // UI preferences are optional; image processing must stay usable.
     }
-  }, [uiPreferences]);
+  }, [uiLanguage, uiPreferences]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void listen("agent2d://open-settings", () => {
+      if (active) setSettingsOpen(true);
+    }).then((dispose) => {
+      if (active) unlisten = dispose;
+      else dispose();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
 
   const assignShortcut = useCallback((action: ShortcutAction, shortcut: string) => {
     setUiPreferences((current) => {
@@ -1779,26 +1907,45 @@ export default function App() {
         <div className="drag-overlay" aria-hidden="true">
           <div className="drag-overlay-card">
             <span>↘</span>
-            <strong>{multiMode ? "画像を追加" : "画像を置き換え"}</strong>
-            <small>{multiMode ? "複数枚をまとめてドロップできます" : "ウィンドウ内のどこでもドロップできます"}</small>
+            <strong>{multiMode ? tr("画像を追加", "Add images") : tr("画像を置き換え", "Replace image")}</strong>
+            <small>{multiMode ? tr("複数枚をまとめてドロップできます", "Drop multiple images at once") : tr("ウィンドウ内のどこでもドロップできます", "Drop anywhere in the window")}</small>
           </div>
         </div>
       )}
 
       {settingsOpen && createPortal(
         <div className="settings-backdrop" role="presentation" onMouseDown={() => setSettingsOpen(false)}>
-          <section className="settings-dialog" role="dialog" aria-modal="true" aria-label="Agent-2D 設定" onMouseDown={(event) => event.stopPropagation()}>
+          <section className="settings-dialog" role="dialog" aria-modal="true" aria-label={`Agent-2D ${copy.settingsTitle}`} onMouseDown={(event) => event.stopPropagation()}>
             <header className="settings-header">
               <div>
                 <span>SETTINGS</span>
-                <strong>外観とショートカット</strong>
+                <strong>{copy.settingsSubtitle}</strong>
               </div>
-              <button type="button" className="settings-close" onClick={() => setSettingsOpen(false)}>閉じる</button>
+              <button type="button" className="settings-close" onClick={() => setSettingsOpen(false)}>{copy.close}</button>
             </header>
             <div className="settings-scroll">
               <section className="settings-section">
                 <div className="settings-section-head">
-                  <div><strong>Theme</strong><small>作業内容は変えず、色・素材感・コントラストだけを切り替えます。</small></div>
+                  <div><strong>{copy.language}</strong><small>{copy.languageDetail}</small></div>
+                </div>
+                <div className="language-grid" role="group" aria-label={copy.language}>
+                  {LANGUAGE_OPTIONS.map((language) => (
+                    <button
+                      key={language.id}
+                      type="button"
+                      className={uiPreferences.language === language.id ? "active" : ""}
+                      aria-pressed={uiPreferences.language === language.id}
+                      onClick={() => setUiPreferences((current) => ({ ...current, language: language.id }))}
+                    >
+                      <strong>{language.label}</strong>
+                      <small>{uiLanguage === "ja" ? language.detailJa : language.detailEn}</small>
+                    </button>
+                  ))}
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head">
+                  <div><strong>{copy.theme}</strong><small>{copy.themeDetail}</small></div>
                 </div>
                 <div className="theme-grid">
                   {THEME_OPTIONS.map((theme) => (
@@ -1812,25 +1959,25 @@ export default function App() {
                       <span className="theme-swatches" aria-hidden="true">
                         {theme.swatches.map((color) => <i key={color} style={{ background: color }} />)}
                       </span>
-                      <span className="theme-copy"><strong>{theme.name}</strong><small>{theme.detail}</small></span>
+                      <span className="theme-copy"><strong>{theme.name}</strong><small>{uiLanguage === "ja" ? theme.detailJa : theme.detailEn}</small></span>
                     </button>
                   ))}
                 </div>
               </section>
               <section className="settings-section">
                 <div className="settings-section-head shortcut-head">
-                  <div><strong>Keyboard Shortcuts</strong><small>キー欄を押して新しい組み合わせを入力。Delete / Backspaceで解除できます。</small></div>
-                  <button type="button" onClick={() => setUiPreferences((current) => ({ ...current, shortcuts: { ...DEFAULT_SHORTCUTS } }))}>初期値へ戻す</button>
+                  <div><strong>{copy.shortcuts}</strong><small>{copy.shortcutsDetail}</small></div>
+                  <button type="button" onClick={() => setUiPreferences((current) => ({ ...current, shortcuts: { ...DEFAULT_SHORTCUTS } }))}>{copy.reset}</button>
                 </div>
                 <div className="shortcut-list">
-                  {SHORTCUT_ROWS.map((item) => (
+                  {currentShortcutRows.map((item) => (
                     <div className="shortcut-row" key={item.id}>
                       <div><strong>{item.label}</strong><small>{item.detail}</small></div>
-                      <ShortcutCaptureButton value={uiPreferences.shortcuts[item.id]} label={item.label} onChange={(value) => assignShortcut(item.id, value)} />
+                      <ShortcutCaptureButton value={uiPreferences.shortcuts[item.id]} label={item.label} language={uiLanguage} onChange={(value) => assignShortcut(item.id, value)} />
                     </div>
                   ))}
                 </div>
-                <p className="shortcut-note">同じキーを別操作へ割り当てた場合は、以前の割り当てを自動で解除します。入力欄へ文字を入力中は、設定を開く操作以外のショートカットを無効化します。</p>
+                <p className="shortcut-note">{copy.shortcutConflict}</p>
               </section>
             </div>
           </section>
@@ -1852,36 +1999,32 @@ export default function App() {
           {OPERATION_ORDER.map((item, index) => (
             <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]])} · ${modeLabel(item)}`}>
               {modeLabel(item)}
-              <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : item === "object-edit" ? "クリック選択・削除" : "SVG化 · イラスト/線画"}</small>
+              <small>{operationSubtitle(item, uiLanguage)}</small>
             </button>
           ))}
         </section>
-        <button type="button" className="settings-trigger" onClick={() => setSettingsOpen(true)} aria-label="外観とショートカット設定">
-          <strong>設定</strong>
-          <small>{shortcutDisplay(uiPreferences.shortcuts.settings)}</small>
-        </button>
       </div>
 
       <section className="workspace-grid">
         <aside className="control-panel">
-          <div className="section-heading">
-            <div className="section-label">SOURCE</div>
-            <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running || operation === "crop" || operation === "object-edit"} title={operation === "crop" ? "Custom は1枚ずつ構図を調整します" : operation === "object-edit" ? "Object Editは画像ごとに対象物を指定します" : undefined}>
-              <span className="toggle-track"><i /></span>
-              複数 {multiMode ? "ON" : "OFF"}
-            </button>
-          </div>
-          <button className={`drop-zone ${inputPath ? "loaded" : ""}`} onClick={openImage} disabled={running}>
-            <span className="drop-icon">↘</span>
-            <strong>{multiMode ? "画像を追加" : inputPath ? "画像を変更" : "画像をドロップ"}</strong>
-            <span>{inputPath ? basename(inputPath) : "ウィンドウ全体へD&D / クリックして選択"}</span>
-          </button>
+          {operation !== "crop" && operation !== "object-edit" && (
+            <div className="input-mode-bar">
+              <div>
+                <strong>{copy.batchInput}</strong>
+                <small>{multiMode ? copy.multiple : copy.single}</small>
+              </div>
+              <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running}>
+                <span className="toggle-track"><i /></span>
+                {copy.multiple}
+              </button>
+            </div>
+          )}
 
           {multiMode && queue.length > 0 && (
             <div className="queue-card">
               <div className="queue-head">
                 <span>{queue.length} images</span>
-                <button onClick={() => setQueue([])} disabled={running}>Clear</button>
+                <button onClick={() => setQueue([])} disabled={running}>{copy.clear}</button>
               </div>
               <div className="queue-list">
                 {queue.map((entry, index) => (
@@ -2081,8 +2224,8 @@ export default function App() {
               </div>
               <div className="object-control-card">
                 <div className="object-quick-guide">
-                  <strong>{inputPath ? "対象をクリックして選択" : "まず画像を読み込む"}</strong>
-                  <span>{inputPath ? `${shortcutDisplay(uiPreferences.shortcuts.objectUndo)}で戻す · ⌥クリックで除外 · ⇧ドラッグで範囲` : "SOURCEへドロップするか、画像選択ボタンから開始できます。"}</span>
+                  <strong>{inputPath ? copy.objectSelect : copy.objectLoadFirst}</strong>
+                  <span>{inputPath ? `${shortcutDisplay(uiPreferences.shortcuts.objectUndo)}で戻す · ⌥クリックで除外 · ⇧ドラッグで範囲` : copy.loadHint}</span>
                 </div>
                 {inputPath && <>
                 <div className="object-mask-adjust">
@@ -2103,7 +2246,7 @@ export default function App() {
                   <span>＋ {objectPoints.filter((point) => point.label === "include").length}</span>
                   <span>− {objectPoints.filter((point) => point.label === "exclude").length}</span>
                   <span>Box {objectBox ? "1" : "0"}</span>
-                  <span title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}>{objectMaskLoading ? "AI更新中… 続けてクリック可" : objectMaskPreview ? "選択済み" : "対象をクリック"}</span>
+                  <span title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}>{objectMaskLoading ? tr("AI更新中… 続けてクリック可", "AI updating… you can keep clicking") : objectMaskPreview ? copy.selected : copy.selectTarget}</span>
                   <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す ⌘Z</button>
                   <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>リセット</button>
                 </div>
@@ -2250,13 +2393,13 @@ export default function App() {
           <div className="section-label">OUTPUT</div>
           <div className="output-folder-row">
             <div className="output-folder-display">
-              <span>保存先フォルダ</span>
-              <strong title={outputDirectory}>{outputDirectory || "未選択"}</strong>
+              <span>{copy.saveFolder}</span>
+              <strong title={outputDirectory}>{outputDirectory || copy.notSelected}</strong>
             </div>
             <button onClick={chooseOutputDirectory} disabled={!inputPath || running}>Finder…</button>
           </div>
           <label className="field output-name-field">
-            <span>ファイル名</span>
+            <span>{copy.fileName}</span>
             <input
               value={multiMode ? "入力名-agent2d-*（自動）" : outputName}
               onChange={(event) => { setOutputName(event.target.value); setOutputPath(""); }}
@@ -2265,7 +2408,7 @@ export default function App() {
             />
           </label>
           <div className="output-preview-line">
-            <span>最終名</span>
+            <span>{copy.finalName}</span>
             <code>{multiMode ? `各入力名 → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
           </div>
           {outputPath && <div className="resolved-output" title={outputPath}>保存先: {outputPath}</div>}
@@ -2305,41 +2448,46 @@ export default function App() {
                 <div><span className="after-label">OUTPUT</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}</div>
               </figcaption>
               <div className="crop-workbench">
-                <div
-                  ref={cropStageRef}
-                  className="crop-frame"
-                  style={{ aspectRatio: `${targetWidth} / ${targetHeight}` }}
-                  tabIndex={0}
-                  role="application"
-                  aria-label="Ultra custom preview. Drag, wheel, or arrow keys to adjust."
-                  onPointerDown={handleCropPointerDown}
-                  onPointerMove={handleCropPointerMove}
-                  onPointerUp={endCropDrag}
-                  onPointerCancel={endCropDrag}
-                  onWheel={(event) => {
-                    if (!inputPreview || running) return;
-                    event.preventDefault();
-                    setCropZoom((value) => clamp(value + (event.deltaY < 0 ? 0.12 : -0.12), 1, 6));
-                  }}
-                  onKeyDown={(event) => {
-                    if (running) return;
-                    const step = event.shiftKey ? 0.1 : event.altKey ? 0.012 : 0.035;
-                    if (event.key === "ArrowLeft") { event.preventDefault(); adjustCrop(-step, 0); }
-                    else if (event.key === "ArrowRight") { event.preventDefault(); adjustCrop(step, 0); }
-                    else if (event.key === "ArrowUp") { event.preventDefault(); adjustCrop(0, -step); }
-                    else if (event.key === "ArrowDown") { event.preventDefault(); adjustCrop(0, step); }
-                    else if (event.key === "Enter") { event.preventDefault(); void start(); }
-                    else if (event.key === "Escape") { event.preventDefault(); setCropX(0); setCropY(0); }
-                  }}
-                >
-                  {inputPreview ? (
-                    <>
-                      <img className="crop-image" src={inputPreview} alt="Crop source" style={cropImageStyle} draggable={false} />
-                      <div className="crop-grid-overlay" aria-hidden="true"><i /><i /><i /><i /></div>
-                      <div className="crop-edge-shade" aria-hidden="true" />
-                    </>
-                  ) : <div className="empty-preview">Drop an image anywhere</div>}
-                </div>
+                {inputPreview ? (
+                  <div
+                    ref={cropStageRef}
+                    className="crop-frame"
+                    style={{ aspectRatio: `${targetWidth} / ${targetHeight}` }}
+                    tabIndex={0}
+                    role="application"
+                    aria-label="Ultra custom preview. Drag, wheel, or arrow keys to adjust."
+                    onPointerDown={handleCropPointerDown}
+                    onPointerMove={handleCropPointerMove}
+                    onPointerUp={endCropDrag}
+                    onPointerCancel={endCropDrag}
+                    onWheel={(event) => {
+                      if (running) return;
+                      event.preventDefault();
+                      setCropZoom((value) => clamp(value + (event.deltaY < 0 ? 0.12 : -0.12), 1, 6));
+                    }}
+                    onKeyDown={(event) => {
+                      if (running) return;
+                      const step = event.shiftKey ? 0.1 : event.altKey ? 0.012 : 0.035;
+                      if (event.key === "ArrowLeft") { event.preventDefault(); adjustCrop(-step, 0); }
+                      else if (event.key === "ArrowRight") { event.preventDefault(); adjustCrop(step, 0); }
+                      else if (event.key === "ArrowUp") { event.preventDefault(); adjustCrop(0, -step); }
+                      else if (event.key === "ArrowDown") { event.preventDefault(); adjustCrop(0, step); }
+                      else if (event.key === "Enter") { event.preventDefault(); void start(); }
+                      else if (event.key === "Escape") { event.preventDefault(); setCropX(0); setCropY(0); }
+                    }}
+                  >
+                    <img className="crop-image" src={inputPreview} alt="Crop source" style={cropImageStyle} draggable={false} />
+                    <div className="crop-grid-overlay" aria-hidden="true"><i /><i /><i /><i /></div>
+                    <div className="crop-edge-shade" aria-hidden="true" />
+                  </div>
+                ) : (
+                  <div className="canvas-empty-state canvas-empty-state-static">
+                    <span className="canvas-empty-mark" aria-hidden="true">＋</span>
+                    <strong>{copy.loadImage}</strong>
+                    <small>{copy.loadHint}</small>
+                    <button type="button" onClick={() => void openImage()} disabled={running}>{copy.selectImage}</button>
+                  </div>
+                )}
               </div>
               <div className="crop-helpbar">
                 <span>Drag · Wheel · ↑↓←→</span>
@@ -2357,7 +2505,7 @@ export default function App() {
                   <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running || !inputPreview}>＋</button>
                   <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running || !inputPreview}>Fit</button>
                 </div>
-                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{!inputPreview ? "画像未選択" : objectMaskLoading ? "選択中…" : objectMaskPreview ? "選択済み" : "クリックで選択"}</span></div>
+                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{!inputPreview ? copy.imageNotSelected : objectMaskLoading ? tr("選択中…", "Selecting…") : objectMaskPreview ? copy.selected : copy.objectSelect}</span></div>
               </figcaption>
               {inputPreview && (
                 <div className="object-canvas-toolbar object-canvas-toolbar-docked" role="group" aria-label="Object selection tool">
@@ -2412,9 +2560,9 @@ export default function App() {
                 ) : (
                   <div className="canvas-empty-state" onPointerDown={(event) => event.stopPropagation()}>
                     <span className="canvas-empty-mark" aria-hidden="true">＋</span>
-                    <strong>画像を読み込んでください</strong>
-                    <small>左のSOURCEへドロップ、またはここから選択できます。</small>
-                    <button type="button" onClick={(event) => { event.stopPropagation(); void openImage(); }} disabled={running}>画像を選択</button>
+                    <strong>{copy.loadImage}</strong>
+                    <small>{copy.loadHint}</small>
+                    <button type="button" onClick={(event) => { event.stopPropagation(); void openImage(); }} disabled={running}>{copy.selectImage}</button>
                   </div>
                 )}
                 {objectMaskLoading && <div className="object-mask-loading">SAM 2.1 selecting…</div>}
@@ -2437,7 +2585,7 @@ export default function App() {
           <figure className="comparison-card">
             <figcaption>
               <div><span className="before-label">BEFORE</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
-              <div className="compare-help">← Afterを広く · drag · Beforeを広く →</div>
+              <div className="compare-help">{tr("← Afterを広く · drag · Beforeを広く →", "← More After · drag · More Before →")}</div>
               <div><span className="after-label">AFTER</span>{displayResult && <b>{displayResult.outputWidth}×{displayResult.outputHeight}</b>}</div>
             </figcaption>
             {comparisonOutputs.length > 1 && (
@@ -2506,9 +2654,16 @@ export default function App() {
                       <span>‹</span><i /><span>›</span>
                     </button>
                   )}
-                  {!displayOutputPreview && <div className="result-waiting">処理後、ここで重ね比較できます</div>}
+                  {!displayOutputPreview && <div className="result-waiting">{tr("処理後、ここで重ね比較できます", "After processing, compare the two images here")}</div>}
                 </>
-              ) : <div className="empty-preview">Drop an image anywhere</div>}
+              ) : (
+                <div className="canvas-empty-state">
+                  <span className="canvas-empty-mark" aria-hidden="true">＋</span>
+                  <strong>{multiMode ? copy.loadImages : copy.loadImage}</strong>
+                  <small>{multiMode ? copy.loadHintMultiple : copy.loadHint}</small>
+                  <button type="button" onClick={() => void openImage()} disabled={running}>{multiMode ? copy.selectImages : copy.selectImage}</button>
+                </div>
+              )}
             </div>
           </figure>
           )}

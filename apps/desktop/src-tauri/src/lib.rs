@@ -29,7 +29,10 @@ use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{
+    Emitter, State,
+    menu::{Menu, MenuItem},
+};
 use uuid::Uuid;
 
 const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
@@ -824,6 +827,26 @@ fn cancel_job_command(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .menu(|app| {
+            let menu = Menu::default(app)?;
+            #[cfg(target_os = "macos")]
+            if let Some(app_menu) = menu.items()?.first().and_then(|item| item.as_submenu()).cloned() {
+                let settings = MenuItem::with_id(
+                    app,
+                    "agent2d-settings",
+                    "Settings…",
+                    true,
+                    None::<&str>,
+                )?;
+                app_menu.insert(&settings, 1)?;
+            }
+            Ok(menu)
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "agent2d-settings" {
+                let _ = app.emit("agent2d://open-settings", ());
+            }
+        })
         .manage(JobManager::default())
         .invoke_handler(tauri::generate_handler![
             inspect_image_command,
