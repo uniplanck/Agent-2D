@@ -158,6 +158,168 @@ function modelHelp(modelId: string): { title: string; body: string; use: string 
   };
 }
 
+function NumberStepper({
+  value,
+  onChange,
+  min,
+  max,
+  step = 1,
+  disabled = false,
+  ariaLabel,
+  suffix,
+  onEnter,
+}: {
+  value: number;
+  onChange: (value: number) => void;
+  min: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  ariaLabel: string;
+  suffix?: string;
+  onEnter?: () => void;
+}) {
+  const precision = Math.max(0, `${step}`.split(".")[1]?.length ?? 0);
+  const normalize = useCallback((next: number) => {
+    const bounded = Math.min(max ?? Number.POSITIVE_INFINITY, Math.max(min, next));
+    return Number(bounded.toFixed(precision));
+  }, [max, min, precision]);
+
+  return (
+    <div className="number-stepper">
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(normalize(Number(event.target.value) || min))}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && onEnter) {
+            event.preventDefault();
+            onEnter();
+          }
+        }}
+        disabled={disabled}
+        aria-label={ariaLabel}
+      />
+      {suffix && <span className="number-stepper-suffix">{suffix}</span>}
+      <div className="number-stepper-actions" aria-hidden={disabled || undefined}>
+        <button type="button" onClick={() => onChange(normalize(value - step))} disabled={disabled || value <= min} aria-label={`${ariaLabel}を減らす`}>−</button>
+        <button type="button" onClick={() => onChange(normalize(value + step))} disabled={disabled || (max != null && value >= max)} aria-label={`${ariaLabel}を増やす`}>＋</button>
+      </div>
+    </div>
+  );
+}
+
+function SizePresetMenu({
+  disabled,
+  presets,
+  onApply,
+  onDelete,
+}: {
+  disabled: boolean;
+  presets: SavedSizePreset[];
+  onApply: (width: number, height: number) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [openState, setOpenState] = useState(false);
+  const [position, setPosition] = useState({ left: 12, top: 12, width: 260 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const closeTimerRef = useRef<number | null>(null);
+
+  const cancelClose = useCallback(() => {
+    if (closeTimerRef.current != null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleClose = useCallback(() => {
+    cancelClose();
+    closeTimerRef.current = window.setTimeout(() => setOpenState(false), 180);
+  }, [cancelClose]);
+
+  const place = useCallback(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const width = Math.min(280, Math.max(220, window.innerWidth - 24));
+    const height = popoverRef.current?.offsetHeight ?? 260;
+    const left = Math.min(Math.max(12, rect.left), Math.max(12, window.innerWidth - width - 12));
+    const below = rect.bottom + 8;
+    const top = below + height <= window.innerHeight - 12
+      ? below
+      : Math.max(12, rect.top - height - 8);
+    setPosition({ left, top, width });
+  }, []);
+
+  useEffect(() => {
+    if (!openState) return;
+    place();
+    const frame = window.requestAnimationFrame(place);
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (!buttonRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpenState(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenState(false);
+        buttonRef.current?.focus();
+      }
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [openState, place]);
+
+  useEffect(() => () => cancelClose(), [cancelClose]);
+
+  return (
+    <>
+      <div className="preset-menu" onMouseEnter={() => { cancelClose(); setOpenState(true); }} onMouseLeave={scheduleClose}>
+        <button ref={buttonRef} type="button" onClick={() => setOpenState((value) => !value)} disabled={disabled} aria-expanded={openState}>サイズプリセット ▾</button>
+      </div>
+      {openState && createPortal(
+        <div
+          ref={popoverRef}
+          className="preset-popover preset-popover-floating"
+          role="menu"
+          style={{ left: position.left, top: position.top, width: position.width }}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        >
+          <span className="preset-heading">BUILT-IN</span>
+          {[[1024, 1024], [1080, 1350], [1080, 1920], [1200, 630]].map(([width, height]) => (
+            <button key={`${width}x${height}`} type="button" onClick={() => { onApply(width, height); setOpenState(false); }}>
+              <span>{width}×{height}</span><small>px</small>
+            </button>
+          ))}
+          {presets.length > 0 && <span className="preset-heading saved">SAVED</span>}
+          {presets.map((preset) => (
+            <div className="saved-preset-row" key={preset.id}>
+              <button type="button" className="saved-preset-apply" onClick={() => { onApply(preset.width, preset.height); setOpenState(false); }}>
+                <span>{preset.name}</span><small>{preset.width}×{preset.height}</small>
+              </button>
+              <button type="button" className="saved-preset-delete" aria-label={`${preset.name}を削除`} onClick={(event) => { event.stopPropagation(); onDelete(preset.id); }}>×</button>
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function InfoHint({ title, children }: { title: string; children: ReactNode }) {
   const [openState, setOpenState] = useState(false);
   const [position, setPosition] = useState({ left: 12, top: 12, width: 380 });
@@ -445,7 +607,6 @@ export default function App() {
   const [cropFrameSize, setCropFrameSize] = useState({ width: 0, height: 0 });
   const [savedSizePresets, setSavedSizePresets] = useState<SavedSizePreset[]>(loadSavedSizePresets);
   const [presetName, setPresetName] = useState("");
-  const [presetMenuOpen, setPresetMenuOpen] = useState(false);
   const [sizeCapEnabled, setSizeCapEnabled] = useState(false);
   const [sizeCapValue, setSizeCapValue] = useState(1);
   const [sizeCapUnit, setSizeCapUnit] = useState<"KB" | "MB">("MB");
@@ -1484,14 +1645,14 @@ export default function App() {
             <>
               <div className="section-label">CUSTOM OUTPUT</div>
               <div className="field-row two size-fields">
-                <label>
+                <div className="field-control">
                   <span>Width · px</span>
-                  <input type="number" min={1} max={32768} value={targetWidth} onChange={(event) => setTargetWidth(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
-                </label>
-                <label>
+                  <NumberStepper value={targetWidth} onChange={(value) => setTargetWidth(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel="出力幅" />
+                </div>
+                <div className="field-control">
                   <span>Height · px</span>
-                  <input type="number" min={1} max={32768} value={targetHeight} onChange={(event) => setTargetHeight(clamp(Math.round(Number(event.target.value) || 1), 1, 32768))} disabled={running} />
-                </label>
+                  <NumberStepper value={targetHeight} onChange={(value) => setTargetHeight(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel="出力高さ" />
+                </div>
               </div>
               <div className="source-size-tools">
                 <button
@@ -1519,25 +1680,19 @@ export default function App() {
                       {multiplier}×
                     </button>
                   ))}
-                  <label className="source-multiplier-input">
-                    <input
-                      type="number"
+                  <div className="source-multiplier-input">
+                    <NumberStepper
+                      value={sourceSizeMultiplier}
+                      onChange={(value) => setSourceSizeMultiplier(clamp(value, 0.1, maxSourceSizeMultiplier))}
                       min={0.1}
                       max={Number(maxSourceSizeMultiplier.toFixed(2))}
                       step={0.1}
-                      value={sourceSizeMultiplier}
-                      onChange={(event) => setSourceSizeMultiplier(clamp(Number(event.target.value) || 0.1, 0.1, maxSourceSizeMultiplier))}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          applySourceSizeMultiplier(sourceSizeMultiplier);
-                        }
-                      }}
                       disabled={running || !inputInfo}
-                      aria-label="元画像サイズ倍率"
+                      ariaLabel="元画像サイズ倍率"
+                      suffix="×"
+                      onEnter={() => applySourceSizeMultiplier(sourceSizeMultiplier)}
                     />
-                    <span>×</span>
-                  </label>
+                  </div>
                   <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>適用</button>
                 </div>
                 {inputInfo && (
@@ -1548,32 +1703,12 @@ export default function App() {
               </div>
               <div className="size-toolbar custom-size-toolbar">
                 <button type="button" onClick={() => { setTargetWidth(targetHeight); setTargetHeight(targetWidth); }} disabled={running}>↔ W/H</button>
-                <div
-                  className="preset-menu"
-                  onMouseEnter={() => setPresetMenuOpen(true)}
-                  onMouseLeave={() => setPresetMenuOpen(false)}
-                >
-                  <button type="button" onClick={() => setPresetMenuOpen((value) => !value)} disabled={running}>サイズプリセット ▾</button>
-                  {presetMenuOpen && (
-                    <div className="preset-popover" role="menu">
-                      <span className="preset-heading">BUILT-IN</span>
-                      {[[1024, 1024], [1080, 1350], [1080, 1920], [1200, 630]].map(([width, height]) => (
-                        <button key={`${width}x${height}`} type="button" onClick={() => { setCropPreset(width, height); setPresetMenuOpen(false); }}>
-                          <span>{width}×{height}</span><small>px</small>
-                        </button>
-                      ))}
-                      {savedSizePresets.length > 0 && <span className="preset-heading saved">SAVED</span>}
-                      {savedSizePresets.map((preset) => (
-                        <div className="saved-preset-row" key={preset.id}>
-                          <button type="button" className="saved-preset-apply" onClick={() => { setCropPreset(preset.width, preset.height); setPresetMenuOpen(false); }}>
-                            <span>{preset.name}</span><small>{preset.width}×{preset.height}</small>
-                          </button>
-                          <button type="button" className="saved-preset-delete" aria-label={`${preset.name}を削除`} onClick={(event) => { event.stopPropagation(); deleteSavedPreset(preset.id); }}>×</button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <SizePresetMenu
+                  disabled={running}
+                  presets={savedSizePresets}
+                  onApply={setCropPreset}
+                  onDelete={deleteSavedPreset}
+                />
               </div>
               <div className="preset-save-row">
                 <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder={`名前（未入力なら ${targetWidth}×${targetHeight}）`} disabled={running} />
@@ -1587,7 +1722,7 @@ export default function App() {
                 </label>
                 {sizeCapEnabled && (
                   <div className="size-cap-fields">
-                    <input type="number" min={0.01} step={0.05} value={sizeCapValue} onChange={(event) => setSizeCapValue(Math.max(0.01, Number(event.target.value) || 0.01))} disabled={running} />
+                    <NumberStepper value={sizeCapValue} onChange={setSizeCapValue} min={0.01} step={0.05} disabled={running} ariaLabel="最大ファイルサイズ" />
                     <select value={sizeCapUnit} onChange={(event) => setSizeCapUnit(event.target.value as "KB" | "MB")} disabled={running}>
                       <option value="KB">KB</option>
                       <option value="MB">MB</option>
@@ -1742,11 +1877,11 @@ export default function App() {
                   </label>
                 </div>
                 {vectorPreset !== "line-art" && (
-                  <label className="vector-color-field">
+                  <div className="vector-color-field">
                     <span>最大色数</span>
-                    <input type="number" min={2} max={64} value={vectorMaxColors} onChange={(event) => setVectorMaxColors(clamp(Math.round(Number(event.target.value) || 2), 2, 64))} disabled={running} />
+                    <NumberStepper value={vectorMaxColors} onChange={(value) => setVectorMaxColors(Math.round(value))} min={2} max={64} step={1} disabled={running} ariaLabel="最大色数" />
                     <small>少ないほどロゴ的で軽量。多いほど元画像の色を残します。</small>
-                  </label>
+                  </div>
                 )}
                 <div className="vectorize-note">
                   <strong>Raster → real SVG paths</strong>
