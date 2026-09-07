@@ -7,7 +7,9 @@
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release:app": "tauri build --bundles app",
+    "release:mac": "tauri build --bundles dmg"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

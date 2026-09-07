@@ -147,8 +147,33 @@ Release bundle:
 
 ```bash
 cd apps/desktop
-npm run tauri -- build --bundles app
+npm run release:app
 ```
+
+macOS distribution image:
+
+```bash
+cd apps/desktop
+npm run release:mac
+```
+
+By default, macOS bundles use Tauri's ad-hoc signing identity (`-`). This keeps local Apple Silicon builds signed without storing credentials in the repository, but it is **not** a substitute for Developer ID distribution and users may still receive Gatekeeper warnings.
+
+For public distribution without Gatekeeper warnings, install a valid **Developer ID Application** certificate and override the default identity with `APPLE_SIGNING_IDENTITY`. Tauri can notarize the same DMG build when either of these credential sets is supplied at build time:
+
+```text
+App Store Connect API:
+APPLE_API_ISSUER
+APPLE_API_KEY
+APPLE_API_KEY_PATH
+
+or Apple account:
+APPLE_ID
+APPLE_PASSWORD
+APPLE_TEAM_ID
+```
+
+Do not commit signing certificates, private keys, app-specific passwords, or notarization credentials. With the Developer ID identity and notarization credentials present, run `npm run release:mac`; Tauri performs signing/notarization as part of the distribution build.
 
 Primary Desktop functions:
 
