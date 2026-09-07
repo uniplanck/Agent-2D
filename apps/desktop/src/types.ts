@@ -1,4 +1,4 @@
-export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize" | "remove-bg";
+export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize" | "remove-bg" | "object-edit";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve" | "compact";
@@ -40,6 +40,63 @@ export interface Agent2DResult {
   warnings: string[];
 }
 
+export type ObjectPointLabel = "include" | "exclude";
+export type ObjectEditAction = "keep-selected" | "make-selected-transparent" | "remove-and-fill";
+
+export interface ObjectPoint {
+  x: number;
+  y: number;
+  label: ObjectPointLabel;
+}
+
+export interface ObjectBoxPrompt {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+export interface ObjectSelection {
+  points: ObjectPoint[];
+  boxPrompt?: ObjectBoxPrompt | null;
+  expandPx: number;
+  featherPx: number;
+}
+
+export interface ObjectSelectionResult {
+  jobId: string;
+  inputPath: string;
+  outputMaskPath: string;
+  width: number;
+  height: number;
+  score: number;
+  modelId: string;
+  elapsedMs: number;
+  warnings: string[];
+}
+
+export interface ObjectMaskPreview {
+  preview: string;
+  score: number;
+  width: number;
+  height: number;
+}
+
+export interface ObjectEditRuntimeStatus {
+  installed: boolean;
+  managed: boolean;
+  releaseId: string;
+  root: string;
+  pythonPath: string;
+  runnerPath: string;
+  modelCacheDir: string;
+  lamaModelPath: string;
+  samModelId: string;
+  samModelRevision: string;
+  lamaModelUrl: string;
+  sharedPythonRuntime: boolean;
+}
+
 export interface DesktopJobRequest {
   operation: Operation;
   inputPath: string;
@@ -59,6 +116,8 @@ export interface DesktopJobRequest {
   vectorDetail?: "clean" | "balanced" | "detailed" | null;
   vectorMaxColors?: number | null;
   vectorThreshold?: number | null;
+  objectAction?: ObjectEditAction | null;
+  objectSelection?: ObjectSelection | null;
 }
 
 export interface DesktopJobStatus {

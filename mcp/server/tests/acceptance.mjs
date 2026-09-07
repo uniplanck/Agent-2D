@@ -35,6 +35,8 @@ try {
     "agent2d_compress",
     "agent2d_custom",
     "agent2d_remove_background",
+    "agent2d_object_select",
+    "agent2d_object_edit",
     "agent2d_vectorize",
     "agent2d_optimize",
     "agent2d_capabilities",
@@ -51,6 +53,9 @@ try {
   }
   if (typeof capabilityEnvelope.data?.backgroundRemoval?.installed !== "boolean") {
     throw new Error("capabilities did not expose background-removal runtime status");
+  }
+  if (typeof capabilityEnvelope.data?.objectEdit?.installed !== "boolean") {
+    throw new Error("capabilities did not expose object-edit runtime status");
   }
 
   const inspection = await callTool({
@@ -233,6 +238,76 @@ try {
     backgroundRemoved = [backgroundEnvelope.data.outputWidth, backgroundEnvelope.data.outputHeight, backgroundEnvelope.data.codec];
   }
 
+  let objectSelected = null;
+  let objectSelectedWarmMs = null;
+  let objectEdited = null;
+  if (capabilityEnvelope.data.objectEdit.installed === true) {
+    const objectMaskPath = join(temp, "object-mask.png");
+    const objectMask = await callTool({
+      name: "agent2d_object_select",
+      arguments: {
+        inputPath: vectorInput,
+        outputMaskPath: objectMaskPath,
+        includePoints: [{ x: 20, y: 20 }],
+        expandPx: 1,
+        featherPx: 0.5,
+      },
+    });
+    const objectMaskEnvelope = parseTextResult(objectMask);
+    assertSuccess(objectMaskEnvelope, "object-select");
+    if (objectMaskEnvelope.data?.modelId !== "facebook/sam2.1-hiera-base-plus") {
+      throw new Error(`object-select did not report SAM2.1 Base+: ${JSON.stringify(objectMaskEnvelope.data)}`);
+    }
+    objectSelected = [objectMaskEnvelope.data.width, objectMaskEnvelope.data.height, objectMaskEnvelope.data.score];
+
+    const warmMaskPath = join(temp, "object-mask-warm.png");
+    const warmMask = await callTool({
+      name: "agent2d_object_select",
+      arguments: {
+        inputPath: vectorInput,
+        outputMaskPath: warmMaskPath,
+        includePoints: [{ x: 24, y: 20 }],
+        expandPx: 1,
+        featherPx: 0.5,
+      },
+    });
+    const warmMaskEnvelope = parseTextResult(warmMask);
+    assertSuccess(warmMaskEnvelope, "object-select-warm");
+    if (!(warmMaskEnvelope.data?.elapsedMs < objectMaskEnvelope.data?.elapsedMs)) {
+      throw new Error(`persistent object bridge did not improve warm selection latency: cold=${objectMaskEnvelope.data?.elapsedMs} warm=${warmMaskEnvelope.data?.elapsedMs}`);
+    }
+    if (warmMaskEnvelope.data?.elapsedMs > 5000) {
+      throw new Error(`warm object selection remained too slow: ${warmMaskEnvelope.data?.elapsedMs}ms`);
+    }
+    objectSelectedWarmMs = warmMaskEnvelope.data.elapsedMs;
+
+    const objectAlphaPath = join(temp, "object-transparent.png");
+    const objectAlpha = await callTool({
+      name: "agent2d_object_edit",
+      arguments: {
+        inputPath: vectorInput,
+        outputPath: objectAlphaPath,
+        action: "make-selected-transparent",
+        format: "png",
+        includePoints: [{ x: 20, y: 20 }],
+        expandPx: 1,
+        featherPx: 1,
+      },
+    });
+    const objectAlphaEnvelope = parseTextResult(objectAlpha);
+    assertSuccess(objectAlphaEnvelope, "object-edit-transparent");
+    const objectInspection = await callTool({
+      name: "agent2d_inspect",
+      arguments: { inputPath: objectAlphaPath },
+    });
+    const objectInspectionEnvelope = parseTextResult(objectInspection);
+    assertSuccess(objectInspectionEnvelope, "inspect-object-edit");
+    if (objectInspectionEnvelope.data?.hasAlpha !== true) {
+      throw new Error("object-edit transparent output did not retain alpha");
+    }
+    objectEdited = [objectAlphaEnvelope.data.outputWidth, objectAlphaEnvelope.data.outputHeight, objectAlphaEnvelope.data.codec];
+  }
+
   const vectorPath = join(temp, "vector.svg");
   const vectorized = await callTool({
     name: "agent2d_vectorize",
@@ -286,6 +361,9 @@ try {
       compressMulti: compressMultiEnvelope.data.results.map((entry) => entry.codec),
       custom: customEnvelope.data.results.map((entry) => [entry.codec, entry.outputWidth, entry.outputHeight]),
       backgroundRemoved,
+      objectSelected,
+      objectSelectedWarmMs,
+      objectEdited,
       vectorized: [vectorEnvelope.data.codec, vectorEnvelope.data.outputWidth, vectorEnvelope.data.outputHeight],
       optimizeMulti: optimizeMultiEnvelope.data.results.map((entry) => entry.codec),
       optimized: [optimizeEnvelope.data.outputWidth, optimizeEnvelope.data.outputHeight],

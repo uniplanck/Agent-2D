@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Cursor,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
@@ -12,17 +13,21 @@ use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, BackgroundRemovalRequest, CancellationToken, CompressRequest,
     CompressionMode, CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult,
-    JobState, OptimizeRequest,
-    OutputFormat, SuperResolutionMode, UpscaleOptions, UpscaleScale, VectorizeDetail,
-    VectorizePreset, VectorizeRequest, cleanup_output, inspect_image, validate_output_path,
+    JobState, ObjectEditAction, ObjectEditRequest, ObjectSelection, ObjectSelectionRequest,
+    ObjectSelectionResult, OptimizeRequest, OutputFormat, SuperResolutionMode, UpscaleOptions,
+    UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest, cleanup_output, inspect_image,
+    validate_output_path,
 };
 use agent2d_pipeline::{
-    BackgroundRuntimeStatus, background_runtime_status, custom_image_with_cancel,
-    install_background_runtime, optimize_image_with_cancel, remove_background_with_cancel,
-    vectorize_image_with_cancel,
+    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, background_runtime_status,
+    custom_image_with_cancel, edit_object_with_cancel, install_background_runtime,
+    install_object_edit_runtime, object_edit_runtime_status, optimize_image_with_cancel,
+    remove_background_with_cancel, segment_object_mask, vectorize_image_with_cancel,
+    warm_object_edit_runtime,
 };
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
@@ -40,6 +45,8 @@ enum DesktopOperation {
     Vectorize,
     #[serde(rename = "remove-bg")]
     RemoveBg,
+    #[serde(rename = "object-edit")]
+    ObjectEdit,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +70,8 @@ struct DesktopJobRequest {
     vector_detail: Option<String>,
     vector_max_colors: Option<u16>,
     vector_threshold: Option<u8>,
+    object_action: Option<ObjectEditAction>,
+    object_selection: Option<ObjectSelection>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -447,6 +456,22 @@ fn execute_job(
             },
             cancellation,
         ),
+        DesktopOperation::ObjectEdit => edit_object_with_cancel(
+            &ObjectEditRequest {
+                input_path,
+                output_path,
+                action: request.object_action.ok_or_else(|| Agent2DError::UnsupportedCompression {
+                    mode: "object-edit".into(),
+                    format: "object_action_required".into(),
+                })?,
+                format,
+                selection: request.object_selection.clone().ok_or_else(|| Agent2DError::UnsupportedCompression {
+                    mode: "object-edit".into(),
+                    format: "object_selection_required".into(),
+                })?,
+            },
+            cancellation,
+        ),
     }
 }
 
@@ -488,11 +513,76 @@ fn background_runtime_status_command() -> Result<BackgroundRuntimeStatus, ErrorP
 }
 
 #[tauri::command]
+fn object_edit_runtime_status_command() -> Result<ObjectEditRuntimeStatus, ErrorPayload> {
+    object_edit_runtime_status().map_err(|error| error.payload())
+}
+
+#[tauri::command]
 async fn install_background_runtime_command() -> Result<BackgroundRuntimeStatus, ErrorPayload> {
     tauri::async_runtime::spawn_blocking(install_background_runtime)
         .await
         .map_err(|error| internal_error(format!("background runtime installer task failed: {error}")))?
         .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn install_object_edit_runtime_command() -> Result<ObjectEditRuntimeStatus, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(install_object_edit_runtime)
+        .await
+        .map_err(|error| internal_error(format!("object edit runtime installer task failed: {error}")))?
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn warm_object_edit_runtime_command() -> Result<(), ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(warm_object_edit_runtime)
+        .await
+        .map_err(|error| internal_error(format!("object edit runtime warm task failed: {error}")))?
+        .map_err(|error| error.payload())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ObjectMaskPreview {
+    preview: String,
+    score: f64,
+    width: u32,
+    height: u32,
+}
+
+#[tauri::command]
+async fn object_mask_preview_command(
+    input_path: String,
+    selection: ObjectSelection,
+) -> Result<ObjectMaskPreview, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let temp = tempfile::tempdir().map_err(|error| internal_error(error.to_string()))?;
+        let mask_path = temp.path().join("object-mask-preview.png");
+        let result: ObjectSelectionResult = segment_object_mask(&ObjectSelectionRequest {
+            input_path: input_path.into(),
+            output_mask_path: mask_path.clone(),
+            selection,
+        }).map_err(|error| error.payload())?;
+        let mask = image::open(&mask_path)
+            .map_err(|error| internal_error(format!("failed to decode object mask preview: {error}")))?
+            .into_luma8();
+        let (mask_width, mask_height) = mask.dimensions();
+        let alpha_mask = RgbaImage::from_fn(mask_width, mask_height, |x, y| {
+            Rgba([255, 255, 255, mask.get_pixel(x, y)[0]])
+        });
+        let mut encoded = Cursor::new(Vec::new());
+        DynamicImage::ImageRgba8(alpha_mask)
+            .write_to(&mut encoded, ImageFormat::Png)
+            .map_err(|error| internal_error(format!("failed to encode object mask preview: {error}")))?;
+        Ok(ObjectMaskPreview {
+            preview: format!("data:image/png;base64,{}", STANDARD.encode(encoded.into_inner())),
+            score: result.score,
+            width: result.width,
+            height: result.height,
+        })
+    })
+    .await
+    .map_err(|error| internal_error(format!("object mask preview task failed: {error}")))?
 }
 
 #[tauri::command]
@@ -662,6 +752,7 @@ fn start_job_command(
                 (DesktopOperation::Resize, _) => "resize_to_size",
                 (DesktopOperation::Vectorize, _) => "vectorize_svg",
                 (DesktopOperation::RemoveBg, _) => "background_removal_feynobg",
+                (DesktopOperation::ObjectEdit, _) => "object_edit_sam2_lama",
             }
             .into();
         });
@@ -740,6 +831,10 @@ pub fn run() {
             install_runtime_command,
             background_runtime_status_command,
             install_background_runtime_command,
+            object_edit_runtime_status_command,
+            install_object_edit_runtime_command,
+            warm_object_edit_runtime_command,
+            object_mask_preview_command,
             preview_image_command,
             resolve_output_path_command,
             start_job_command,

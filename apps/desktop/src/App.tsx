@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -11,6 +11,12 @@ import type {
   DesktopJobStatus,
   ErrorPayload,
   InspectResult,
+  ObjectBoxPrompt,
+  ObjectEditAction,
+  ObjectEditRuntimeStatus,
+  ObjectMaskPreview,
+  ObjectPoint,
+  ObjectSelection,
   Operation,
   OutputFormat,
   SrCapabilities,
@@ -24,6 +30,13 @@ const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "avif", "jxl
 type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
 type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
+type ObjectTool = "include" | "exclude" | "box" | "pan";
+type ObjectSelectionSnapshot = {
+  points: ObjectPoint[];
+  box: ObjectBoxPrompt | null;
+  expand: number;
+  feather: number;
+};
 interface QueueEntry {
   path: string;
   state: QueueState;
@@ -53,6 +66,15 @@ const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }>
 const BACKGROUND_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Transparent" },
   { id: "webp", label: "WebP", detail: "Transparent · Lossless" },
+];
+const OBJECT_ALPHA_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
+  { id: "png", label: "PNG", detail: "Transparent" },
+  { id: "webp", label: "WebP", detail: "Transparent · Lossless" },
+];
+const OBJECT_FILL_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
+  { id: "png", label: "PNG", detail: "Filled · Lossless" },
+  { id: "jpeg", label: "JPG", detail: "Filled · High Quality" },
+  { id: "webp", label: "WebP", detail: "Filled · Lossless" },
 ];
 
 function loadSavedSizePresets(): SavedSizePreset[] {
@@ -262,7 +284,9 @@ function outputFor(input: string, operation: Operation, format: OutputFormat, ba
             ? "vectorized"
             : operation === "remove-bg"
               ? "transparent"
-              : "optimized";
+              : operation === "object-edit"
+                ? "object-edit"
+                : "optimized";
   const ext = operation === "vectorize" ? "svg" : format === "jpeg" ? "jpg" : format;
   return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
 }
@@ -306,6 +330,7 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
   if (operation === "crop" || operation === "resize") return 850 + megapixels * 620;
   if (operation === "vectorize") return 1_100 + megapixels * 1_850;
   if (operation === "remove-bg") return 3_500 + megapixels * 2_400;
+  if (operation === "object-edit") return 5_000 + megapixels * 4_500;
   if (operation === "compress" || scale === 1) return compressionMs;
   const srMs = scale === 4
     ? 2_800 + megapixels * 12_500
@@ -324,6 +349,7 @@ function stageLabel(stage?: string): string {
     case "crop_to_size": return "Custom書き出し";
     case "resize_to_size": return "指定サイズへ縮小";
     case "vectorize_svg": return "SVGベクター化";
+    case "object_edit_sam2_lama": return "Object Edit · SAM2 / LaMa";
     case "background_removal_feynobg": return "FeyNoBg 背景透過";
     case "completed": return "完了";
     case "cancelling": return "キャンセル中";
@@ -356,6 +382,7 @@ function modeLabel(mode: Operation): string {
   if (mode === "resize") return "Resize to Size";
   if (mode === "vectorize") return "Vectorize";
   if (mode === "remove-bg") return "Remove BG";
+  if (mode === "object-edit") return "Object Edit";
   return "Optimize";
 }
 
@@ -428,11 +455,34 @@ export default function App() {
   const [backgroundRuntime, setBackgroundRuntime] = useState<BackgroundRuntimeStatus | null>(null);
   const [backgroundRuntimeChecked, setBackgroundRuntimeChecked] = useState(false);
   const [installingBackgroundRuntime, setInstallingBackgroundRuntime] = useState(false);
+  const [objectRuntime, setObjectRuntime] = useState<ObjectEditRuntimeStatus | null>(null);
+  const [objectRuntimeChecked, setObjectRuntimeChecked] = useState(false);
+  const [installingObjectRuntime, setInstallingObjectRuntime] = useState(false);
+  const [objectRuntimeWarming, setObjectRuntimeWarming] = useState(false);
+  const [objectTool, setObjectTool] = useState<ObjectTool>("include");
+  const [objectPoints, setObjectPoints] = useState<ObjectPoint[]>([]);
+  const [objectBox, setObjectBox] = useState<ObjectBoxPrompt | null>(null);
+  const [objectBoxDraft, setObjectBoxDraft] = useState<ObjectBoxPrompt | null>(null);
+  const [objectExpand, setObjectExpand] = useState(0);
+  const [objectFeather, setObjectFeather] = useState(1);
+  const [objectAction, setObjectAction] = useState<ObjectEditAction>("make-selected-transparent");
+  const [objectMaskPreview, setObjectMaskPreview] = useState("");
+  const [objectMaskScore, setObjectMaskScore] = useState<number | null>(null);
+  const [objectMaskLoading, setObjectMaskLoading] = useState(false);
+  const [objectZoom, setObjectZoom] = useState(1);
+  const [objectPan, setObjectPan] = useState({ x: 0, y: 0 });
+  const [objectStageSize, setObjectStageSize] = useState({ width: 0, height: 0 });
+  const [objectUndoDepth, setObjectUndoDepth] = useState(0);
   const cancelBatchRef = useRef(false);
   const outputDirectoryPinnedRef = useRef(false);
   const compareStageRef = useRef<HTMLDivElement>(null);
   const cropStageRef = useRef<HTMLDivElement>(null);
   const cropDragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
+  const objectStageRef = useRef<HTMLDivElement>(null);
+  const objectMediaRef = useRef<HTMLDivElement>(null);
+  const objectDragRef = useRef<{ pointerId: number; mode: "box" | "pan"; startX: number; startY: number; basePanX: number; basePanY: number; startPoint?: { x: number; y: number } } | null>(null);
+  const objectUndoStackRef = useRef<ObjectSelectionSnapshot[]>([]);
+  const objectMaskRequestRef = useRef(0);
 
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
@@ -470,6 +520,17 @@ export default function App() {
       setCropZoom(1);
       setCropX(0);
       setCropY(0);
+      setObjectPoints([]);
+      setObjectBox(null);
+      setObjectBoxDraft(null);
+      setObjectMaskPreview("");
+      setObjectMaskScore(null);
+      setObjectMaskLoading(false);
+      setObjectZoom(1);
+      setObjectPan({ x: 0, y: 0 });
+      objectUndoStackRef.current = [];
+      setObjectUndoDepth(0);
+      objectMaskRequestRef.current += 1;
       return true;
     } catch (cause) {
       setError(errorText(cause));
@@ -507,14 +568,53 @@ export default function App() {
     void refreshBackgroundRuntime();
   }, [refreshBackgroundRuntime]);
 
+  const refreshObjectRuntime = useCallback(async () => {
+    try {
+      const next = await invoke<ObjectEditRuntimeStatus>("object_edit_runtime_status_command");
+      setObjectRuntime(next);
+    } catch {
+      setObjectRuntime(null);
+    } finally {
+      setObjectRuntimeChecked(true);
+    }
+  }, []);
+
   useEffect(() => {
-    if (operation !== "remove-bg") return;
-    setSelectedFormats((current) => {
-      const compatible = current.filter((format) => format === "png" || format === "webp");
-      if (compatible.length === 0) return ["png"];
-      return compatible.length === current.length ? current : compatible;
-    });
-  }, [operation]);
+    void refreshObjectRuntime();
+  }, [refreshObjectRuntime]);
+
+  useEffect(() => {
+    if (operation !== "object-edit" || !objectRuntime?.installed) return;
+    let active = true;
+    setObjectRuntimeWarming(true);
+    void invoke<void>("warm_object_edit_runtime_command")
+      .catch((cause) => {
+        if (active) setError(errorText(cause));
+      })
+      .finally(() => {
+        if (active) setObjectRuntimeWarming(false);
+      });
+    return () => { active = false; };
+  }, [objectRuntime?.installed, operation]);
+
+  useEffect(() => {
+    if (operation === "remove-bg") {
+      setSelectedFormats((current) => {
+        const compatible = current.filter((format) => format === "png" || format === "webp");
+        if (compatible.length === 0) return ["png"];
+        return compatible.length === current.length ? current : compatible;
+      });
+      return;
+    }
+    if (operation === "object-edit") {
+      setMultiMode(false);
+      setSelectedFormats((current) => {
+        const allowed = objectAction === "remove-and-fill" ? ["png", "jpeg", "webp"] : ["png", "webp"];
+        const compatible = current.filter((format) => allowed.includes(format));
+        return compatible.length > 0 ? [compatible[0]] : ["png"];
+      });
+    }
+  }, [objectAction, operation]);
 
   useEffect(() => {
     try {
@@ -553,6 +653,111 @@ export default function App() {
       setInstallingBackgroundRuntime(false);
     }
   };
+
+  const installObjectRuntime = async () => {
+    if (installingObjectRuntime) return;
+    setInstallingObjectRuntime(true);
+    setError("");
+    try {
+      const next = await invoke<ObjectEditRuntimeStatus>("install_object_edit_runtime_command");
+      setObjectRuntime(next);
+      setObjectRuntimeChecked(true);
+    } catch (cause) {
+      setError(errorText(cause));
+    } finally {
+      setInstallingObjectRuntime(false);
+    }
+  };
+
+  const currentObjectSelection = useMemo<ObjectSelection>(() => ({
+    points: objectPoints,
+    boxPrompt: objectBox,
+    expandPx: objectExpand,
+    featherPx: objectFeather,
+  }), [objectBox, objectExpand, objectFeather, objectPoints]);
+
+  const pushObjectUndo = useCallback(() => {
+    const next: ObjectSelectionSnapshot = {
+      points: objectPoints.map((point) => ({ ...point })),
+      box: objectBox ? { ...objectBox } : null,
+      expand: objectExpand,
+      feather: objectFeather,
+    };
+    objectUndoStackRef.current = [...objectUndoStackRef.current.slice(-39), next];
+    setObjectUndoDepth(objectUndoStackRef.current.length);
+  }, [objectBox, objectExpand, objectFeather, objectPoints]);
+
+  const undoObjectSelection = useCallback(() => {
+    const previous = objectUndoStackRef.current.at(-1);
+    if (!previous) return;
+    objectUndoStackRef.current = objectUndoStackRef.current.slice(0, -1);
+    setObjectUndoDepth(objectUndoStackRef.current.length);
+    objectMaskRequestRef.current += 1;
+    setObjectPoints(previous.points.map((point) => ({ ...point })));
+    setObjectBox(previous.box ? { ...previous.box } : null);
+    setObjectBoxDraft(null);
+    setObjectExpand(previous.expand);
+    setObjectFeather(previous.feather);
+    setObjectMaskPreview("");
+    setObjectMaskScore(null);
+    setObjectMaskLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (operation !== "object-edit") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return;
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "z" && objectUndoStackRef.current.length > 0) {
+        event.preventDefault();
+        undoObjectSelection();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [operation, undoObjectSelection]);
+
+  const refreshObjectMask = useCallback(async (selection: ObjectSelection, requestId: number) => {
+    if (!inputPath || !objectRuntime?.installed || (selection.points.length === 0 && !selection.boxPrompt)) return;
+    try {
+      const preview = await invoke<ObjectMaskPreview>("object_mask_preview_command", {
+        inputPath,
+        selection,
+      });
+      if (requestId !== objectMaskRequestRef.current) return;
+      setObjectMaskPreview(preview.preview);
+      setObjectMaskScore(preview.score);
+    } catch (cause) {
+      if (requestId !== objectMaskRequestRef.current) return;
+      setObjectMaskPreview("");
+      setObjectMaskScore(null);
+      setError(errorText(cause));
+    } finally {
+      if (requestId === objectMaskRequestRef.current) setObjectMaskLoading(false);
+    }
+  }, [inputPath, objectRuntime?.installed]);
+
+  useEffect(() => {
+    const requestId = ++objectMaskRequestRef.current;
+    if (operation !== "object-edit") {
+      setObjectMaskLoading(false);
+      return;
+    }
+    setResult(null);
+    setOutputPreview("");
+    setOutputResults([]);
+    setComparisonOutputs([]);
+    if (currentObjectSelection.points.length === 0 && !currentObjectSelection.boxPrompt) {
+      setObjectMaskPreview("");
+      setObjectMaskScore(null);
+      setObjectMaskLoading(false);
+      return;
+    }
+    setError("");
+    setObjectMaskLoading(true);
+    const timer = window.setTimeout(() => void refreshObjectMask(currentObjectSelection, requestId), 120);
+    return () => window.clearTimeout(timer);
+  }, [currentObjectSelection, operation, refreshObjectMask]);
 
   const handlePaths = useCallback(async (paths: string[]) => {
     const valid = paths.filter(isSupportedImage);
@@ -602,7 +807,7 @@ export default function App() {
   }, [effectiveFormat, inputPath, operation, running]);
 
   useEffect(() => {
-    if (operation === "crop" && multiMode && !running) {
+    if ((operation === "crop" || operation === "object-edit") && multiMode && !running) {
       setMultiMode(false);
       setQueue([]);
     }
@@ -621,6 +826,20 @@ export default function App() {
     observer.observe(stage);
     return () => observer.disconnect();
   }, [inputPreview, operation, targetHeight, targetWidth]);
+
+  useEffect(() => {
+    if (operation !== "object-edit") return;
+    const stage = objectStageRef.current;
+    if (!stage) return;
+    const update = () => {
+      const rect = stage.getBoundingClientRect();
+      setObjectStageSize({ width: rect.width, height: rect.height });
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [inputPreview, operation]);
 
   useEffect(() => {
     if (!backendRunning) return;
@@ -690,6 +909,8 @@ export default function App() {
       vectorDetail: operation === "vectorize" ? vectorDetail : null,
       vectorMaxColors: operation === "vectorize" && vectorPreset !== "line-art" ? vectorMaxColors : null,
       vectorThreshold: null,
+      objectAction: operation === "object-edit" ? objectAction : null,
+      objectSelection: operation === "object-edit" ? currentObjectSelection : null,
     };
     try {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
@@ -737,7 +958,7 @@ export default function App() {
         error: { code: "desktop_request_error", message: errorText(cause) },
       };
     }
-  }, [cropX, cropY, cropZoom, customTargetBytes, modelId, operation, scale, srMode, targetHeight, targetWidth, vectorDetail, vectorMaxColors, vectorPreset]);
+  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, modelId, objectAction, operation, scale, srMode, targetHeight, targetWidth, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
     if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
@@ -745,11 +966,25 @@ export default function App() {
       setError("FeyNoBg runtimeを先にインストールしてください。");
       return;
     }
+    if (operation === "object-edit") {
+      if (!objectRuntime?.installed) {
+        setError("Object Edit runtimeを先にインストールしてください。");
+        return;
+      }
+      if (currentObjectSelection.points.length === 0 && !currentObjectSelection.boxPrompt) {
+        setError("画像上をクリックするかBoxで対象物を選択してください。");
+        return;
+      }
+    }
     const runFormats: OutputFormat[] = operation === "vectorize"
       ? ["png"]
       : operation === "remove-bg"
         ? selectedFormats.filter((format) => format === "png" || format === "webp")
-        : selectedFormats;
+        : operation === "object-edit"
+          ? selectedFormats.filter((format) => objectAction === "remove-and-fill"
+              ? format === "png" || format === "webp" || format === "jpeg"
+              : format === "png" || format === "webp")
+          : selectedFormats;
     if (runFormats.length === 0) return;
     setError("");
     setResult(null);
@@ -876,6 +1111,8 @@ export default function App() {
     ? "本物のSVG pathへ変換します。ロゴ・アイコン・線画・フラットイラスト向け。写真や細かな質感主体の画像には非推奨です。"
     : operation === "remove-bg"
       ? "FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。"
+    : operation === "object-edit"
+      ? "SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。"
     : operation === "crop" && customTargetBytes != null
       ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
       : selectedFormats.map(formatQualityText).join(" · ");
@@ -901,7 +1138,13 @@ export default function App() {
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
     : operation === "vectorize"
       ? withSvgExtension(outputName)
-      : (operation === "remove-bg" ? selectedFormats.filter((format) => format === "png" || format === "webp") : selectedFormats)
+      : (operation === "remove-bg"
+        ? selectedFormats.filter((format) => format === "png" || format === "webp")
+        : operation === "object-edit"
+          ? selectedFormats.filter((format) => objectAction === "remove-and-fill"
+              ? format === "png" || format === "webp" || format === "jpeg"
+              : format === "png" || format === "webp")
+          : selectedFormats)
           .map((targetFormat, _index, formats) => withExtension(outputNameForFormat(outputName, targetFormat, formats.length > 1), targetFormat)).join(" · ");
 
   const updateCompareFromClientX = useCallback((clientX: number) => {
@@ -925,6 +1168,143 @@ export default function App() {
       top: `${(cropFrameSize.height - drawHeight) / 2 - cropY * overflowY / 2}px`,
     };
   }, [cropFrameSize, cropX, cropY, cropZoom, inputInfo, inputPreview]);
+
+  const objectMediaStyle = useMemo(() => {
+    if (!inputInfo || objectStageSize.width <= 0 || objectStageSize.height <= 0) return undefined;
+    const padding = 28;
+    const availableWidth = Math.max(1, objectStageSize.width - padding * 2);
+    const availableHeight = Math.max(1, objectStageSize.height - padding * 2);
+    const baseScale = Math.min(availableWidth / inputInfo.width, availableHeight / inputInfo.height);
+    const width = inputInfo.width * baseScale;
+    const height = inputInfo.height * baseScale;
+    return {
+      width: `${width}px`,
+      height: `${height}px`,
+      left: `${(objectStageSize.width - width) / 2}px`,
+      top: `${(objectStageSize.height - height) / 2}px`,
+      transform: `translate(${objectPan.x}px, ${objectPan.y}px) scale(${objectZoom})`,
+    };
+  }, [inputInfo, objectPan.x, objectPan.y, objectStageSize.height, objectStageSize.width, objectZoom]);
+
+  const objectPointFromClient = useCallback((clientX: number, clientY: number) => {
+    if (!inputInfo) return null;
+    const rect = objectMediaRef.current?.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+    if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+    return {
+      x: clamp(((clientX - rect.left) / rect.width) * inputInfo.width, 0, Math.max(0, inputInfo.width - 1)),
+      y: clamp(((clientY - rect.top) / rect.height) * inputInfo.height, 0, Math.max(0, inputInfo.height - 1)),
+    };
+  }, [inputInfo]);
+
+  const handleObjectPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!inputInfo || !inputPreview || running || (event.button !== 0 && event.button !== 1)) return;
+    const panRequested = objectTool === "pan" || event.button === 1;
+    if (panRequested) {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      objectDragRef.current = {
+        pointerId: event.pointerId,
+        mode: "pan",
+        startX: event.clientX,
+        startY: event.clientY,
+        basePanX: objectPan.x,
+        basePanY: objectPan.y,
+      };
+      return;
+    }
+    const point = objectPointFromClient(event.clientX, event.clientY);
+    if (!point) return;
+    const boxRequested = objectTool === "box" || event.shiftKey;
+    if (boxRequested) {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      objectDragRef.current = {
+        pointerId: event.pointerId,
+        mode: "box",
+        startX: event.clientX,
+        startY: event.clientY,
+        basePanX: objectPan.x,
+        basePanY: objectPan.y,
+        startPoint: point,
+      };
+      setObjectBoxDraft({ x1: point.x, y1: point.y, x2: point.x + 1, y2: point.y + 1 });
+      return;
+    }
+    pushObjectUndo();
+    setObjectPoints((current) => [...current, {
+      x: point.x,
+      y: point.y,
+      label: event.altKey || objectTool === "exclude" ? "exclude" : "include",
+    }]);
+  };
+
+  const handleObjectPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = objectDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.mode === "pan") {
+      setObjectPan({
+        x: drag.basePanX + event.clientX - drag.startX,
+        y: drag.basePanY + event.clientY - drag.startY,
+      });
+      return;
+    }
+    const point = objectPointFromClient(event.clientX, event.clientY);
+    if (!point || !drag.startPoint) return;
+    setObjectBoxDraft({
+      x1: Math.min(drag.startPoint.x, point.x),
+      y1: Math.min(drag.startPoint.y, point.y),
+      x2: Math.max(drag.startPoint.x, point.x),
+      y2: Math.max(drag.startPoint.y, point.y),
+    });
+  };
+
+  const endObjectPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = objectDragRef.current;
+    if (drag?.pointerId === event.pointerId && drag.mode === "box" && objectBoxDraft) {
+      if (objectBoxDraft.x2 - objectBoxDraft.x1 >= 2 && objectBoxDraft.y2 - objectBoxDraft.y1 >= 2) {
+        pushObjectUndo();
+        setObjectBox(objectBoxDraft);
+      }
+      setObjectBoxDraft(null);
+    }
+    if (drag?.pointerId === event.pointerId) objectDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const clearObjectSelection = () => {
+    if (objectPoints.length === 0 && !objectBox) return;
+    pushObjectUndo();
+    setObjectPoints([]);
+    setObjectBox(null);
+    setObjectBoxDraft(null);
+    setObjectMaskPreview("");
+    setObjectMaskScore(null);
+  };
+
+  const adjustObjectExpand = (delta: number) => {
+    pushObjectUndo();
+    setObjectExpand((value) => clamp(value + delta, -32, 32));
+  };
+
+  const handleObjectWheel = (event: ReactWheelEvent<HTMLDivElement>) => {
+    if (!inputPreview || running) return;
+    event.preventDefault();
+    const zoomDelta = clamp(-event.deltaY * 0.0025, -0.18, 0.18);
+    const nextZoom = clamp(objectZoom * (1 + zoomDelta), 1, 6);
+    if (Math.abs(nextZoom - objectZoom) < 0.001) return;
+    const stageRect = objectStageRef.current?.getBoundingClientRect();
+    if (stageRect) {
+      const centerX = stageRect.left + stageRect.width / 2;
+      const centerY = stageRect.top + stageRect.height / 2;
+      const ratio = nextZoom / objectZoom;
+      setObjectPan((current) => ({
+        x: current.x + (event.clientX - centerX - current.x) * (1 - ratio),
+        y: current.y + (event.clientY - centerY - current.y) * (1 - ratio),
+      }));
+    }
+    setObjectZoom(nextZoom);
+  };
 
   const adjustCrop = useCallback((deltaX: number, deltaY: number) => {
     setCropX((value) => clamp(value + deltaX, -1, 1));
@@ -956,6 +1336,10 @@ export default function App() {
 
   const toggleOutputFormat = (targetFormat: OutputFormat) => {
     if (running) return;
+    if (operation === "object-edit") {
+      setSelectedFormats([targetFormat]);
+      return;
+    }
     setSelectedFormats((current) => {
       if (current.includes(targetFormat)) {
         if (current.length === 1) return current;
@@ -1044,10 +1428,10 @@ export default function App() {
       )}
 
       <section className="mode-tabs" aria-label="Operation">
-        {(["enhance", "compress", "optimize", "crop", "remove-bg", "vectorize"] as Operation[]).map((item) => (
+        {(["enhance", "compress", "optimize", "crop", "remove-bg", "object-edit", "vectorize"] as Operation[]).map((item) => (
           <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running}>
             {modeLabel(item)}
-            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : "SVG化 · イラスト/線画"}</small>
+            <small>{item === "enhance" ? "AI超解像" : item === "compress" ? "超圧縮・変換" : item === "optimize" ? "超解像 + 圧縮" : item === "crop" ? "サイズ・構図・容量" : item === "remove-bg" ? "AI背景透過" : item === "object-edit" ? "クリック選択・削除" : "SVG化 · イラスト/線画"}</small>
           </button>
         ))}
       </section>
@@ -1056,7 +1440,7 @@ export default function App() {
         <aside className="control-panel">
           <div className="section-heading">
             <div className="section-label">SOURCE</div>
-            <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running || operation === "crop"} title={operation === "crop" ? "Crop to Size は1枚ずつ構図を調整します" : undefined}>
+            <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running || operation === "crop" || operation === "object-edit"} title={operation === "crop" ? "Custom は1枚ずつ構図を調整します" : operation === "object-edit" ? "Object Editは画像ごとに対象物を指定します" : undefined}>
               <span className="toggle-track"><i /></span>
               複数 {multiMode ? "ON" : "OFF"}
             </button>
@@ -1275,6 +1659,60 @@ export default function App() {
             </>
           )}
 
+          {operation === "object-edit" && (
+            <>
+              <div className="section-label">OBJECT EDIT</div>
+              <div className={`object-runtime-card ${objectRuntime?.installed ? "ready" : "missing"}`}>
+                <div className="object-runtime-head">
+                  <div><strong>SAM 2.1 Base+ + LaMa</strong><span>click segmentation + local inpainting</span></div>
+                  <span className="background-runtime-badge">{!objectRuntimeChecked ? "Checking…" : objectRuntimeWarming ? "WARMING…" : objectRuntime?.installed ? "READY" : "NOT INSTALLED"}</span>
+                </div>
+                {objectRuntime?.installed ? (
+                  <div className="background-runtime-meta"><span>{objectRuntime.samModelId}</span><span>LaMa · shared PyTorch runtime</span></div>
+                ) : (
+                  <div className="background-runtime-install">
+                    <span>初回のみSAM 2.1 Base+とBig-LaMaを取得。既存FeyNoBgのPyTorch runtimeを再利用します。</span>
+                    <button type="button" onClick={installObjectRuntime} disabled={running || installingObjectRuntime}>{installingObjectRuntime ? "Installing…" : "Install Object Edit"}</button>
+                  </div>
+                )}
+              </div>
+              <div className="object-control-card">
+                <div className="object-quick-guide">
+                  <strong>まず対象をクリック</strong>
+                  <span>⌥クリックで除外 · ⇧ドラッグで範囲 · ⌘Zで戻す</span>
+                </div>
+                <div className="object-tool-row" role="group" aria-label="Object selection tool">
+                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 対象</button>
+                  <button type="button" title="対象から除外。Option+クリックでも一時的に使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
+                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
+                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>✋ 移動</button>
+                </div>
+                <div className="object-mask-adjust">
+                  <div><span>Mask範囲</span><strong>{objectExpand > 0 ? `+${objectExpand}` : objectExpand}px</strong></div>
+                  <div className="crop-zoom-row">
+                    <button type="button" onClick={() => adjustObjectExpand(-2)} disabled={running}>−</button>
+                    <input type="range" min={-32} max={32} step={1} value={objectExpand} onPointerDown={pushObjectUndo} onChange={(event) => setObjectExpand(Number(event.target.value))} disabled={running} />
+                    <button type="button" onClick={() => adjustObjectExpand(2)} disabled={running}>＋</button>
+                  </div>
+                </div>
+                <label className="object-feather-field"><span>境界ぼかし <b>{objectFeather.toFixed(1)}px</b></span><input type="range" min={0} max={16} step={0.5} value={objectFeather} onPointerDown={pushObjectUndo} onChange={(event) => setObjectFeather(Number(event.target.value))} disabled={running} /></label>
+                <div className="object-action-grid">
+                  <button type="button" className={objectAction === "keep-selected" ? "active" : ""} onClick={() => setObjectAction("keep-selected")} disabled={running}>選択だけ残す<small>外側を透明化</small></button>
+                  <button type="button" className={objectAction === "make-selected-transparent" ? "active" : ""} onClick={() => setObjectAction("make-selected-transparent")} disabled={running}>選択だけ透明化<small>対象物を抜く</small></button>
+                  <button type="button" className={objectAction === "remove-and-fill" ? "active" : ""} onClick={() => setObjectAction("remove-and-fill")} disabled={running}>自然に削除<small>LaMaで背景復元</small></button>
+                </div>
+                <div className="object-selection-meta">
+                  <span>＋ {objectPoints.filter((point) => point.label === "include").length}</span>
+                  <span>− {objectPoints.filter((point) => point.label === "exclude").length}</span>
+                  <span>Box {objectBox ? "1" : "0"}</span>
+                  <span>{objectMaskLoading ? "AI更新中… 続けてクリック可" : objectMaskScore != null ? `Score ${objectMaskScore.toFixed(3)}` : "対象をクリック"}</span>
+                  <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す ⌘Z</button>
+                  <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>リセット</button>
+                </div>
+              </div>
+            </>
+          )}
+
           {operation === "vectorize" && (
             <>
               <div className="section-label">VECTORIZE TO SVG</div>
@@ -1384,8 +1822,12 @@ export default function App() {
           {operation !== "vectorize" && (
             <>
               <div className="section-label">OUTPUT FORMATS</div>
-              <div className={`format-selector ${operation === "remove-bg" ? "alpha-only" : ""}`} role="group" aria-label="出力形式を複数選択">
-                {(operation === "remove-bg" ? BACKGROUND_OUTPUT_FORMATS : OUTPUT_FORMATS).map((item) => {
+              <div className={`format-selector ${operation === "remove-bg" || operation === "object-edit" ? "alpha-only" : ""}`} role="group" aria-label="出力形式を複数選択">
+                {(operation === "remove-bg"
+                  ? BACKGROUND_OUTPUT_FORMATS
+                  : operation === "object-edit"
+                    ? (objectAction === "remove-and-fill" ? OBJECT_FILL_OUTPUT_FORMATS : OBJECT_ALPHA_OUTPUT_FORMATS)
+                    : OUTPUT_FORMATS).map((item) => {
                   const active = selectedFormats.includes(item.id);
                   return (
                     <button
@@ -1441,15 +1883,15 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
           {error && <div className="error-box">{error}</div>}
 
           <div className="action-row">
-            <button className="primary" onClick={start} disabled={running || (operation !== "vectorize" && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
+            <button className="primary" onClick={start} disabled={running || objectMaskLoading || (operation !== "vectorize" && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (operation === "object-edit" && (!objectRuntime?.installed || (objectPoints.length === 0 && !objectBox))) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
+              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : operation === "object-edit" ? (objectAction === "remove-and-fill" ? "Remove & Fill" : objectAction === "keep-selected" ? "Keep Selected" : "Make Transparent") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>
@@ -1505,6 +1947,73 @@ export default function App() {
                 <span>Shift = 大きく / Option = 細かく</span>
                 <span>最小Zoomは空白が出ないCover</span>
               </div>
+            </figure>
+          ) : operation === "object-edit" ? (
+            <figure className="object-edit-card">
+              <figcaption>
+                <div><span className="before-label">OBJECT SELECT</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div className="object-view-controls">
+                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value - 0.2, 1, 6))} disabled={running}>−</button>
+                  <strong>{objectZoom.toFixed(1)}×</strong>
+                  <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running}>＋</button>
+                  <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running}>Fit</button>
+                </div>
+                <div><span className="after-label">{objectMaskLoading ? "SELECTING…" : objectMaskPreview ? "MASK READY" : "CLICK OBJECT"}</span>{objectMaskScore != null && <b>{objectMaskScore.toFixed(3)}</b>}</div>
+              </figcaption>
+              <div
+                ref={objectStageRef}
+                className={`object-edit-stage tool-${objectTool}`}
+                role="application"
+                aria-label="Object selection preview. Use include, exclude, box, or pan tools."
+                onPointerDown={handleObjectPointerDown}
+                onPointerMove={handleObjectPointerMove}
+                onPointerUp={endObjectPointer}
+                onPointerCancel={endObjectPointer}
+                onWheel={handleObjectWheel}
+              >
+                {inputPreview && inputInfo && objectMediaStyle ? (
+                  <div ref={objectMediaRef} className="object-media-frame" style={objectMediaStyle}>
+                    <img src={inputPreview} alt="Object edit source" draggable={false} />
+                    {objectMaskPreview && (
+                      <div
+                        className="object-mask-overlay"
+                        style={{ WebkitMaskImage: `url(${objectMaskPreview})`, maskImage: `url(${objectMaskPreview})` }}
+                        aria-hidden="true"
+                      />
+                    )}
+                    {objectPoints.map((point, index) => (
+                      <i
+                        key={`${point.label}-${index}-${point.x}-${point.y}`}
+                        className={`object-prompt-point ${point.label}`}
+                        style={{ left: `${(point.x / inputInfo.width) * 100}%`, top: `${(point.y / inputInfo.height) * 100}%`, transform: `scale(${1 / objectZoom})` }}
+                        aria-hidden="true"
+                      >{point.label === "include" ? "+" : "−"}</i>
+                    ))}
+                    {(objectBoxDraft ?? objectBox) && (() => {
+                      const box = (objectBoxDraft ?? objectBox)!;
+                      return <i className="object-prompt-box" style={{
+                        left: `${(box.x1 / inputInfo.width) * 100}%`,
+                        top: `${(box.y1 / inputInfo.height) * 100}%`,
+                        width: `${((box.x2 - box.x1) / inputInfo.width) * 100}%`,
+                        height: `${((box.y2 - box.y1) / inputInfo.height) * 100}%`,
+                        borderWidth: `${2 / objectZoom}px`,
+                      }} aria-hidden="true" />;
+                    })()}
+                  </div>
+                ) : <div className="empty-preview">Drop an image anywhere</div>}
+                {objectMaskLoading && <div className="object-mask-loading">SAM 2.1 selecting…</div>}
+              </div>
+              <div className="object-helpbar">
+                <span>クリック=対象 · ⌥クリック=除外 · ⇧ドラッグ=範囲 · ⌘Z=戻す</span>
+                <span>移動+drag / 中ボタン=Pan · Wheel=カーソル位置でZoom · Mask ±=範囲調整</span>
+                {displayOutputPreview && <span className="object-result-ready">RESULT READY · {objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}</span>}
+              </div>
+              {displayOutputPreview && (
+                <div className="object-result-preview">
+                  <span>RESULT</span>
+                  <img src={displayOutputPreview} alt="Object edit result" />
+                </div>
+              )}
             </figure>
           ) : (
           <figure className="comparison-card">

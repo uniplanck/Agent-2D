@@ -1,22 +1,29 @@
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    io::{self, BufRead, Write},
+    path::PathBuf,
+    process::ExitCode,
+};
 
 use agent2d_compression::compress_image;
 use agent2d_core::{
     Agent2DResult, ApiEnvelope, BackgroundRemovalRequest, CompressRequest, CompressionMode,
-    CompressionOptions, CustomRequest, InspectRequest, InspectResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION,
-    SuperResolutionMode, SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale,
-    VectorizeDetail, VectorizePreset, VectorizeRequest, inspect_image,
+    CompressionOptions, CustomRequest, InspectRequest, InspectResult, ObjectBoxPrompt, ObjectEditAction,
+    ObjectEditRequest, ObjectPoint, ObjectPointLabel, ObjectSelection, ObjectSelectionRequest,
+    ObjectSelectionResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION, SuperResolutionMode,
+    SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale, VectorizeDetail,
+    VectorizePreset, VectorizeRequest, inspect_image,
 };
 use agent2d_pipeline::{
-    BackgroundRuntimeStatus, background_runtime_status, custom_image, install_background_runtime,
-    optimize_image, remove_background, vectorize_image,
+    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, background_runtime_status, custom_image,
+    edit_object, install_background_runtime, install_object_edit_runtime, object_edit_runtime_status,
+    optimize_image, remove_background, segment_object_mask, vectorize_image, warm_object_edit_runtime,
 };
 use agent2d_sr::{
     RuntimeStatus, SrCapabilities, capabilities as sr_capabilities, install_runtime,
     runtime_status, upscale_image,
 };
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -124,6 +131,44 @@ enum Command {
         #[arg(long, value_enum, default_value_t = BackgroundFormatArg::Png)]
         format: BackgroundFormatArg,
     },
+    #[command(about = "Create a SAM2.1 object mask from include/exclude points and/or a box")]
+    ObjectMask {
+        #[arg(value_name = "IMAGE")]
+        input: PathBuf,
+        #[arg(value_name = "MASK_PNG")]
+        output: PathBuf,
+        #[arg(long, value_name = "X,Y")]
+        include: Vec<String>,
+        #[arg(long, value_name = "X,Y")]
+        exclude: Vec<String>,
+        #[arg(long, value_name = "X1,Y1,X2,Y2")]
+        r#box: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        expand: i32,
+        #[arg(long, default_value_t = 0.0)]
+        feather: f64,
+    },
+    #[command(about = "Select an object with SAM2.1 then keep, make transparent, or erase+fill with LaMa")]
+    ObjectEdit {
+        #[arg(value_name = "IMAGE")]
+        input: PathBuf,
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+        #[arg(long, value_enum)]
+        action: ObjectEditActionArg,
+        #[arg(long, value_enum, default_value_t = ObjectEditFormatArg::Png)]
+        format: ObjectEditFormatArg,
+        #[arg(long, value_name = "X,Y")]
+        include: Vec<String>,
+        #[arg(long, value_name = "X,Y")]
+        exclude: Vec<String>,
+        #[arg(long, value_name = "X1,Y1,X2,Y2")]
+        r#box: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        expand: i32,
+        #[arg(long, default_value_t = 0.0)]
+        feather: f64,
+    },
     #[command(about = "Vectorize illustration/logo/line-art raster input into real SVG paths")]
     Vectorize {
         #[arg(value_name = "IMAGE")]
@@ -174,6 +219,49 @@ enum Command {
     BgRuntimeStatus,
     #[command(about = "Install the managed FeyNoBg + NoBg + PyTorch runtime locally")]
     BgRuntimeInstall,
+    #[command(about = "Report the managed SAM2.1 + LaMa Object Edit runtime state")]
+    ObjectRuntimeStatus,
+    #[command(about = "Install SAM2.1 Base+ and Big-LaMa while reusing the FeyNoBg Python/PyTorch runtime")]
+    ObjectRuntimeInstall,
+    #[command(about = "Run a persistent line-delimited JSON bridge for repeated Object Mask/Edit CLI integrations")]
+    ObjectBridge,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ObjectEditActionArg {
+    #[value(name = "keep-selected")]
+    KeepSelected,
+    #[value(name = "make-selected-transparent")]
+    MakeSelectedTransparent,
+    #[value(name = "remove-and-fill")]
+    RemoveAndFill,
+}
+
+impl From<ObjectEditActionArg> for ObjectEditAction {
+    fn from(value: ObjectEditActionArg) -> Self {
+        match value {
+            ObjectEditActionArg::KeepSelected => ObjectEditAction::KeepSelected,
+            ObjectEditActionArg::MakeSelectedTransparent => ObjectEditAction::MakeSelectedTransparent,
+            ObjectEditActionArg::RemoveAndFill => ObjectEditAction::RemoveAndFill,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ObjectEditFormatArg {
+    Png,
+    Webp,
+    Jpeg,
+}
+
+impl From<ObjectEditFormatArg> for OutputFormat {
+    fn from(value: ObjectEditFormatArg) -> Self {
+        match value {
+            ObjectEditFormatArg::Png => OutputFormat::Png,
+            ObjectEditFormatArg::Webp => OutputFormat::Webp,
+            ObjectEditFormatArg::Jpeg => OutputFormat::Jpeg,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -331,6 +419,7 @@ struct CapabilitiesResult {
     compression: CompressionCapabilities,
     super_resolution: SrCapabilities,
     background_removal: BackgroundRuntimeStatus,
+    object_edit: ObjectEditRuntimeStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -542,6 +631,38 @@ fn main() -> ExitCode {
                 Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
             }
         }
+        Command::ObjectMask { input, output, include, exclude, r#box, expand, feather } => {
+            let selection = match object_selection_from_cli(include, exclude, r#box, expand, feather) {
+                Ok(selection) => selection,
+                Err(error) => return failure::<ObjectSelectionResult>(error.payload(), cli.pretty),
+            };
+            let request = ObjectSelectionRequest {
+                input_path: input,
+                output_mask_path: output,
+                selection,
+            };
+            match segment_object_mask(&request) {
+                Ok(result) => success(&result, cli.pretty),
+                Err(error) => failure::<ObjectSelectionResult>(error.payload(), cli.pretty),
+            }
+        }
+        Command::ObjectEdit { input, output, action, format, include, exclude, r#box, expand, feather } => {
+            let selection = match object_selection_from_cli(include, exclude, r#box, expand, feather) {
+                Ok(selection) => selection,
+                Err(error) => return failure::<Agent2DResult>(error.payload(), cli.pretty),
+            };
+            let request = ObjectEditRequest {
+                input_path: input,
+                output_path: output,
+                action: action.into(),
+                format: format.into(),
+                selection,
+            };
+            match edit_object(&request) {
+                Ok(result) => success(&result, cli.pretty),
+                Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+            }
+        }
         Command::Vectorize {
             input,
             output,
@@ -606,8 +727,8 @@ fn main() -> ExitCode {
             }
             success_outputs(results, cli.pretty)
         }
-        Command::Capabilities => match (sr_capabilities(), background_runtime_status()) {
-            (Ok(super_resolution), Ok(background_removal)) => success(
+        Command::Capabilities => match (sr_capabilities(), background_runtime_status(), object_edit_runtime_status()) {
+            (Ok(super_resolution), Ok(background_removal), Ok(object_edit)) => success(
                 &CapabilitiesResult {
                     schema_version: SCHEMA_VERSION,
                     compression: CompressionCapabilities {
@@ -621,10 +742,11 @@ fn main() -> ExitCode {
                     },
                     super_resolution,
                     background_removal,
+                    object_edit,
                 },
                 cli.pretty,
             ),
-            (Err(error), _) | (_, Err(error)) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
+            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
         },
         Command::RuntimeStatus => match runtime_status() {
             Ok(status) => success(&status, cli.pretty),
@@ -642,6 +764,142 @@ fn main() -> ExitCode {
             Ok(status) => success(&status, cli.pretty),
             Err(error) => failure::<BackgroundRuntimeStatus>(error.payload(), cli.pretty),
         },
+        Command::ObjectRuntimeStatus => match object_edit_runtime_status() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<ObjectEditRuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::ObjectRuntimeInstall => match install_object_edit_runtime() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<ObjectEditRuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::ObjectBridge => object_bridge(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObjectBridgeRequest {
+    args: Vec<String>,
+}
+
+fn object_bridge() -> ExitCode {
+    if let Err(error) = warm_object_edit_runtime() {
+        eprintln!(
+            "{}",
+            serialize(&ApiEnvelope::<serde_json::Value>::failure(error.payload()), false)
+        );
+        return ExitCode::from(2);
+    }
+
+    println!("{}", serde_json::json!({ "ready": true }));
+    let _ = io::stdout().flush();
+    let stdin = io::stdin();
+    for line in stdin.lock().lines() {
+        let response = match line {
+            Ok(line) if !line.trim().is_empty() => match serde_json::from_str::<ObjectBridgeRequest>(&line) {
+                Ok(request) => run_object_bridge_request(request.args),
+                Err(error) => bridge_protocol_error(format!("invalid bridge request: {error}")),
+            },
+            Ok(_) => continue,
+            Err(error) => {
+                println!("{}", bridge_protocol_error(format!("bridge stdin read failed: {error}")));
+                let _ = io::stdout().flush();
+                return ExitCode::from(2);
+            }
+        };
+        println!("{response}");
+        let _ = io::stdout().flush();
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_object_bridge_request(args: Vec<String>) -> String {
+    let argv = std::iter::once("agent2d".to_owned()).chain(args).collect::<Vec<_>>();
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(error) => return bridge_protocol_error(format!("invalid Agent-2D object command: {error}")),
+    };
+    match cli.command {
+        Command::ObjectMask { input, output, include, exclude, r#box, expand, feather } => {
+            let selection = match object_selection_from_cli(include, exclude, r#box, expand, feather) {
+                Ok(selection) => selection,
+                Err(error) => return serialize(&ApiEnvelope::<ObjectSelectionResult>::failure(error.payload()), false),
+            };
+            let request = ObjectSelectionRequest { input_path: input, output_mask_path: output, selection };
+            match segment_object_mask(&request) {
+                Ok(result) => serialize(&ApiEnvelope::success(result), false),
+                Err(error) => serialize(&ApiEnvelope::<ObjectSelectionResult>::failure(error.payload()), false),
+            }
+        }
+        Command::ObjectEdit { input, output, action, format, include, exclude, r#box, expand, feather } => {
+            let selection = match object_selection_from_cli(include, exclude, r#box, expand, feather) {
+                Ok(selection) => selection,
+                Err(error) => return serialize(&ApiEnvelope::<Agent2DResult>::failure(error.payload()), false),
+            };
+            let request = ObjectEditRequest {
+                input_path: input,
+                output_path: output,
+                action: action.into(),
+                format: format.into(),
+                selection,
+            };
+            match edit_object(&request) {
+                Ok(result) => serialize(&ApiEnvelope::success(result), false),
+                Err(error) => serialize(&ApiEnvelope::<Agent2DResult>::failure(error.payload()), false),
+            }
+        }
+        _ => bridge_protocol_error("object-bridge accepts only object-mask and object-edit commands"),
+    }
+}
+
+fn bridge_protocol_error(message: impl Into<String>) -> String {
+    serde_json::json!({
+        "schemaVersion": SCHEMA_VERSION,
+        "ok": false,
+        "error": { "code": "bridge_protocol_error", "message": message.into() }
+    })
+    .to_string()
+}
+
+fn object_selection_from_cli(
+    include: Vec<String>,
+    exclude: Vec<String>,
+    box_value: Option<String>,
+    expand_px: i32,
+    feather_px: f64,
+) -> Result<ObjectSelection, agent2d_core::Agent2DError> {
+    let mut points = Vec::with_capacity(include.len() + exclude.len());
+    for value in include {
+        let (x, y) = parse_pair(&value)?;
+        points.push(ObjectPoint { x, y, label: ObjectPointLabel::Include });
+    }
+    for value in exclude {
+        let (x, y) = parse_pair(&value)?;
+        points.push(ObjectPoint { x, y, label: ObjectPointLabel::Exclude });
+    }
+    let box_prompt = match box_value {
+        Some(value) => {
+            let parts = parse_numbers(&value, 4)?;
+            Some(ObjectBoxPrompt { x1: parts[0], y1: parts[1], x2: parts[2], y2: parts[3] })
+        }
+        None => None,
+    };
+    Ok(ObjectSelection { points, box_prompt, expand_px, feather_px })
+}
+
+fn parse_pair(value: &str) -> Result<(f64, f64), agent2d_core::Agent2DError> {
+    let parts = parse_numbers(value, 2)?;
+    Ok((parts[0], parts[1]))
+}
+
+fn parse_numbers(value: &str, expected: usize) -> Result<Vec<f64>, agent2d_core::Agent2DError> {
+    let parsed = value.split(',').map(|part| part.trim().parse::<f64>()).collect::<Result<Vec<_>, _>>();
+    match parsed {
+        Ok(values) if values.len() == expected && values.iter().all(|value| value.is_finite()) => Ok(values),
+        _ => Err(agent2d_core::Agent2DError::UnsupportedCompression {
+            mode: "object-selection".into(),
+            format: format!("expected {expected} comma-separated finite numbers, got `{value}`"),
+        }),
     }
 }
 

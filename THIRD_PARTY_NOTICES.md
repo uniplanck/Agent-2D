@@ -63,6 +63,22 @@ Agent-2D's `Remove BG` operation uses the FeyNoBg model through the upstream NoB
 
 The managed installer downloads these assets only after an explicit install action. Normal background-removal inference is configured with Hugging Face offline mode and runs locally. A future Agent-2D package that redistributes FeyNoBg weights, NoBg/PyTorch wheels, or their transitive Python dependencies must include the applicable license texts, notices, and a complete dependency inventory rather than relying on this engineering summary alone.
 
+## SAM 2.1 Base+ and Big-LaMa object editing
+
+Agent-2D's `Object Edit` operation uses Meta's SAM 2.1 Base+ for interactive point / negative-point / box segmentation and Big-LaMa for optional image inpainting. The application bundle does not vendor either model. An explicit Object Edit runtime install reuses the existing FeyNoBg Python/PyTorch environment and downloads only the Object Edit-specific model assets into the user's Agent-2D Application Support directory.
+
+- Segmentation model: `facebook/sam2.1-hiera-base-plus`
+- Pinned Hugging Face revision used by Agent-2D: `b732075`
+- SAM 2 repository/license: Apache-2.0
+- Repository: https://github.com/facebookresearch/sam2
+- Model distribution: https://huggingface.co/facebook/sam2.1-hiera-base-plus
+- Inpainting checkpoint: Big-LaMa `big-lama.pt`
+- Agent-2D download source: https://github.com/enesmsahin/simple-lama-inpainting/releases/download/v0.1.0/big-lama.pt
+- LaMa upstream repository/license: https://github.com/advimman/lama / Apache-2.0
+- Wrapper release source: https://github.com/enesmsahin/simple-lama-inpainting
+
+Normal SAM inference is configured with Hugging Face offline mode after installation. The local implementation loads Big-LaMa directly as a TorchScript checkpoint rather than adding OpenCV or the full simple-lama-inpainting Python package. Before redistributing SAM or LaMa model files in a public Agent-2D package, verify the exact checkpoint terms and include the applicable license and notice material.
+
 ## Tauri and Rust/JavaScript dependencies
 
 Agent-2D Desktop uses Tauri 2, React, Vite, and their dependency graphs. Cargo and npm lockfiles pin the dependency set used to build v0.1. A public binary distribution should generate a complete software-bill-of-materials/license report from those lockfiles before release.

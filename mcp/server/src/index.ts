@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { dirname, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -12,6 +13,15 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(here, "../../..");
 const agent2dBin = process.env.AGENT2D_BIN ?? resolve(projectRoot, "target/debug/agent2d");
+
+type ObjectBridge = {
+  child: ChildProcessWithoutNullStreams;
+  lines: AsyncIterator<string>;
+  stderr: string;
+};
+
+let objectBridge: ObjectBridge | null = null;
+let objectBridgeQueue: Promise<void> = Promise.resolve();
 
 const server = new Server(
   { name: "agent-2d", version: "0.1.0" },
@@ -42,6 +52,30 @@ const outputFormatsProperty = {
 const backgroundFormatProperty = {
   type: "string",
   enum: ["png", "webp"],
+} as const;
+const objectPointArrayProperty = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      x: { type: "number", minimum: 0 },
+      y: { type: "number", minimum: 0 },
+    },
+    required: ["x", "y"],
+    additionalProperties: false,
+  },
+  maxItems: 64,
+} as const;
+const objectBoxProperty = {
+  type: "object",
+  properties: {
+    x1: { type: "number", minimum: 0 },
+    y1: { type: "number", minimum: 0 },
+    x2: { type: "number", minimum: 0 },
+    y2: { type: "number", minimum: 0 },
+  },
+  required: ["x1", "y1", "x2", "y2"],
+  additionalProperties: false,
 } as const;
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -147,6 +181,44 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "agent2d_object_select",
+      description: "Select an arbitrary object with SAM 2.1 Base+ using positive/negative click points and/or a box, then write the refined grayscale mask as PNG.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputMaskPath: pathProperty,
+          includePoints: objectPointArrayProperty,
+          excludePoints: objectPointArrayProperty,
+          box: objectBoxProperty,
+          expandPx: { type: "integer", minimum: -64, maximum: 64 },
+          featherPx: { type: "number", minimum: 0, maximum: 32 },
+        },
+        required: ["inputPath", "outputMaskPath"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "agent2d_object_edit",
+      description: "Select an arbitrary object with SAM 2.1 Base+ and either keep only it, make it transparent, or erase it and fill the hole with LaMa.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          action: { type: "string", enum: ["keep-selected", "make-selected-transparent", "remove-and-fill"] },
+          format: { type: "string", enum: ["png", "webp", "jpeg"] },
+          includePoints: objectPointArrayProperty,
+          excludePoints: objectPointArrayProperty,
+          box: objectBoxProperty,
+          expandPx: { type: "integer", minimum: -64, maximum: 64 },
+          featherPx: { type: "number", minimum: 0, maximum: 32 },
+        },
+        required: ["inputPath", "outputPath", "action"],
+        additionalProperties: false,
+      },
+    },
+    {
       name: "agent2d_vectorize",
       description: "Vectorize a raster illustration, logo, icon, or line-art image into real SVG paths. This is not photo super-resolution; photo-like inputs may produce a warning.",
       inputSchema: {
@@ -219,6 +291,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         break;
       case "agent2d_remove_background":
         result = await runAgent2d(buildRemoveBackgroundArgs(args));
+        break;
+      case "agent2d_object_select":
+        result = await runObjectAgent2d(buildObjectSelectArgs(args));
+        break;
+      case "agent2d_object_edit":
+        result = await runObjectAgent2d(buildObjectEditArgs(args));
         break;
       case "agent2d_vectorize":
         result = await runAgent2d(buildVectorizeArgs(args));
@@ -317,6 +395,47 @@ function buildRemoveBackgroundArgs(args: Record<string, unknown>): string[] {
   ];
 }
 
+function buildObjectSelectArgs(args: Record<string, unknown>): string[] {
+  const command = [
+    "object-mask",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputMaskPath"),
+  ];
+  appendObjectPrompts(command, args);
+  appendInteger(command, "--expand", args.expandPx);
+  appendFiniteNumber(command, "--feather", args.featherPx);
+  return command;
+}
+
+function buildObjectEditArgs(args: Record<string, unknown>): string[] {
+  const command = [
+    "object-edit",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+    "--action",
+    requiredEnum(args, "action", ["keep-selected", "make-selected-transparent", "remove-and-fill"]),
+    "--format",
+    optionalEnum(args, "format", ["png", "webp", "jpeg"], "png"),
+  ];
+  appendObjectPrompts(command, args);
+  appendInteger(command, "--expand", args.expandPx);
+  appendFiniteNumber(command, "--feather", args.featherPx);
+  return command;
+}
+
+function appendObjectPrompts(command: string[], args: Record<string, unknown>): void {
+  for (const point of optionalPointArray(args, "includePoints")) {
+    command.push("--include", `${point.x},${point.y}`);
+  }
+  for (const point of optionalPointArray(args, "excludePoints")) {
+    command.push("--exclude", `${point.x},${point.y}`);
+  }
+  if (args.box !== undefined) {
+    const box = requiredBox(args, "box");
+    command.push("--box", `${box.x1},${box.y1},${box.x2},${box.y2}`);
+  }
+}
+
 function buildVectorizeArgs(args: Record<string, unknown>): string[] {
   const command = [
     "vectorize",
@@ -353,6 +472,40 @@ function buildOptimizeArgs(args: Record<string, unknown>): string[] {
   return command;
 }
 
+function optionalPointArray(args: Record<string, unknown>, key: string): Array<{ x: number; y: number }> {
+  const value = args[key];
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64) throw new Error(`${key} must be an array with at most 64 points`);
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object") throw new Error(`${key}[${index}] must be an object`);
+    const point = entry as Record<string, unknown>;
+    const x = point.x;
+    const y = point.y;
+    if (typeof x !== "number" || !Number.isFinite(x) || x < 0 || typeof y !== "number" || !Number.isFinite(y) || y < 0) {
+      throw new Error(`${key}[${index}] requires finite non-negative x/y`);
+    }
+    return { x, y };
+  });
+}
+
+function requiredBox(args: Record<string, unknown>, key: string): { x1: number; y1: number; x2: number; y2: number } {
+  const value = args[key];
+  if (!value || typeof value !== "object") throw new Error(`${key} must be an object`);
+  const box = value as Record<string, unknown>;
+  const keys = ["x1", "y1", "x2", "y2"] as const;
+  const numbers = keys.map((part) => box[part]);
+  if (numbers.some((part) => typeof part !== "number" || !Number.isFinite(part) || part < 0)) {
+    throw new Error(`${key} requires finite non-negative x1/y1/x2/y2`);
+  }
+  return { x1: numbers[0] as number, y1: numbers[1] as number, x2: numbers[2] as number, y2: numbers[3] as number };
+}
+
+function appendInteger(command: string[], flag: string, value: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(`${flag} must be an integer`);
+  command.push(flag, String(value));
+}
+
 function appendOutputSelection(command: string[], args: Record<string, unknown>): void {
   if (args.formats !== undefined) {
     const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
@@ -362,6 +515,85 @@ function appendOutputSelection(command: string[], args: Record<string, unknown>)
   if (args.format !== undefined) {
     command.push("--format", requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"]));
   }
+}
+
+function runObjectAgent2d(args: string[]): Promise<unknown> {
+  const request = objectBridgeQueue.then(() => runObjectBridgeRequest(args));
+  objectBridgeQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
+async function runObjectBridgeRequest(args: string[]): Promise<unknown> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const bridge = await ensureObjectBridge();
+      bridge.child.stdin.write(`${JSON.stringify({ args })}\n`);
+      const response = await bridge.lines.next();
+      if (response.done) throw new Error(`Agent-2D object bridge closed stdout: ${bridge.stderr}`);
+      const parsed = JSON.parse(response.value) as { ok?: boolean };
+      if (parsed && parsed.ok === true) return parsed;
+      throw parsed;
+    } catch (error) {
+      lastError = error;
+      stopObjectBridge();
+      if (attempt === 1) throw error;
+    }
+  }
+  throw lastError;
+}
+
+async function ensureObjectBridge(): Promise<ObjectBridge> {
+  if (objectBridge && objectBridge.child.exitCode === null && objectBridge.child.signalCode === null) {
+    return objectBridge;
+  }
+  stopObjectBridge();
+
+  const child = spawn(agent2dBin, ["object-bridge"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: process.env,
+  });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  const reader = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const bridge: ObjectBridge = {
+    child,
+    lines: reader[Symbol.asyncIterator](),
+    stderr: "",
+  };
+  child.stderr.on("data", (chunk: string) => {
+    bridge.stderr = boundedAppend(bridge.stderr, chunk, 20_000);
+  });
+  child.on("exit", () => {
+    if (objectBridge?.child === child) objectBridge = null;
+    reader.close();
+  });
+
+  const ready = await bridge.lines.next();
+  if (ready.done) {
+    child.kill();
+    throw new Error(`Agent-2D object bridge exited before ready: ${bridge.stderr}`);
+  }
+  let readyPayload: { ready?: boolean };
+  try {
+    readyPayload = JSON.parse(ready.value) as { ready?: boolean };
+  } catch {
+    child.kill();
+    throw new Error(`Agent-2D object bridge returned invalid ready payload: ${ready.value}`);
+  }
+  if (readyPayload.ready !== true) {
+    child.kill();
+    throw new Error(`Agent-2D object bridge did not report ready: ${ready.value}`);
+  }
+  objectBridge = bridge;
+  return bridge;
+}
+
+function stopObjectBridge(): void {
+  if (!objectBridge) return;
+  const bridge = objectBridge;
+  objectBridge = null;
+  if (bridge.child.exitCode === null && bridge.child.signalCode === null) bridge.child.kill();
 }
 
 function runAgent2d(args: string[]): Promise<unknown> {
@@ -497,6 +729,8 @@ function boundedAppend(current: string, chunk: string, maxCharacters: number): s
   const combined = current + chunk;
   return combined.length <= maxCharacters ? combined : combined.slice(combined.length - maxCharacters);
 }
+
+process.stdin.once("end", stopObjectBridge);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

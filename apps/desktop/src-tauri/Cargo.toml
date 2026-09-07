@@ -18,8 +18,10 @@ agent2d-compression = { path = "../../../crates/agent2d-compression" }
 agent2d-sr = { path = "../../../crates/agent2d-sr" }
 agent2d-pipeline = { path = "../../../crates/agent2d-pipeline" }
 base64 = "0.22"
+image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tempfile = "3"
 uuid.workspace = true

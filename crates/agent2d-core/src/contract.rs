@@ -203,6 +203,79 @@ pub struct BackgroundRemovalRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum ObjectPointLabel {
+    Include,
+    Exclude,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectPoint {
+    pub x: f64,
+    pub y: f64,
+    pub label: ObjectPointLabel,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectBoxPrompt {
+    pub x1: f64,
+    pub y1: f64,
+    pub x2: f64,
+    pub y2: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSelection {
+    pub points: Vec<ObjectPoint>,
+    pub box_prompt: Option<ObjectBoxPrompt>,
+    pub expand_px: i32,
+    pub feather_px: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSelectionRequest {
+    pub input_path: PathBuf,
+    pub output_mask_path: PathBuf,
+    pub selection: ObjectSelection,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSelectionResult {
+    pub job_id: String,
+    pub input_path: PathBuf,
+    pub output_mask_path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub score: f64,
+    pub model_id: String,
+    pub elapsed_ms: u64,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ObjectEditAction {
+    KeepSelected,
+    MakeSelectedTransparent,
+    RemoveAndFill,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectEditRequest {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub action: ObjectEditAction,
+    pub format: OutputFormat,
+    pub selection: ObjectSelection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum VectorizePreset {
     Illustration,
     Logo,

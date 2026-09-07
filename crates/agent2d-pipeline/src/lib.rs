@@ -20,11 +20,18 @@ use vtracer::{ColorImage, Config as VectorConfig, Hierarchical, Preset as Vector
 use vtracer::progress::CancelToken as VectorCancelToken;
 
 mod background;
+mod object_edit;
 pub use background::{
     BACKGROUND_MODEL_ID, BACKGROUND_MODEL_REVISION, BACKGROUND_NOBG_VERSION,
     BACKGROUND_RUNTIME_RELEASE_ID, BACKGROUND_TORCH_VERSION, BackgroundRuntimeStatus,
     background_runtime_status,
     install_background_runtime, remove_background, remove_background_with_cancel,
+};
+pub use object_edit::{
+    OBJECT_LAMA_MODEL_URL, OBJECT_RUNTIME_RELEASE_ID, OBJECT_SAM_MODEL_ID,
+    OBJECT_SAM_MODEL_REVISION, ObjectEditRuntimeStatus, edit_object, edit_object_with_cancel,
+    install_object_edit_runtime, object_edit_runtime_status, segment_object_mask,
+    segment_object_mask_with_cancel, warm_object_edit_runtime,
 };
 
 fn crop_geometry(

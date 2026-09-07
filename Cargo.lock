@@ -56,11 +56,13 @@ dependencies = [
  "agent2d-pipeline",
  "agent2d-sr",
  "base64 0.22.1",
+ "image",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tempfile",
  "uuid",
 ]
 
@@ -73,6 +75,7 @@ dependencies = [
  "agent2d-sr",
  "image",
  "serde",
+ "serde_json",
  "tempfile",
  "uuid",
  "vtracer",

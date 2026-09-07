@@ -11,6 +11,7 @@ agent2d-compression = { path = "../agent2d-compression" }
 agent2d-sr = { path = "../agent2d-sr" }
 image.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tempfile = "3"
 uuid.workspace = true
 vtracer.workspace = true
