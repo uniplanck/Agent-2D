@@ -1,9 +1,11 @@
+mod backend;
 mod contract;
 mod error;
 mod inspect;
 mod job;
 mod path_safety;
 
+pub use backend::{backend_available, backend_command_path};
 pub use contract::*;
 pub use error::{Agent2DError, ErrorPayload};
 pub use inspect::inspect_image;

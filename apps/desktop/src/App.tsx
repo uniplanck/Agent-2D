@@ -6,6 +6,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Agent2DResult,
+  BackendCapabilities,
   BackgroundRuntimeStatus,
   CompressionMode,
   DesktopJobRequest,
@@ -32,7 +33,7 @@ type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
 type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
 type ObjectTool = "include" | "exclude" | "box" | "pan";
-type NavOperation = "enhance" | "compress" | "optimize" | "crop" | "cutout" | "vectorize";
+type NavOperation = "enhance" | "compress" | "crop" | "cutout" | "vectorize";
 type CutoutMode = "auto" | "object";
 type SrContentPreset = "general" | "photo" | "illustration" | "ai-art" | "graphics";
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
@@ -75,7 +76,7 @@ interface FormatComparisonOutput {
 
 const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
 const UI_PREFERENCES_STORAGE_KEY = "agent2d.ui-preferences.v1";
-const NAV_OPERATION_ORDER: NavOperation[] = ["enhance", "compress", "optimize", "crop", "cutout", "vectorize"];
+const NAV_OPERATION_ORDER: NavOperation[] = ["enhance", "compress", "crop", "cutout", "vectorize"];
 const OPERATION_SHORTCUT_ACTIONS: ShortcutAction[] = ["operation1", "operation2", "operation3", "operation4", "operation5", "operation6"];
 const DEFAULT_SHORTCUTS: ShortcutMap = {
   operation1: "Meta+Digit1",
@@ -223,7 +224,6 @@ const DEFAULT_OUTPUT_NAMING: OutputNamingTemplates = {
 const OUTPUT_NAMING_ROWS: Array<{ id: Operation; label: string; detailJa: string; detailEn: string }> = [
   { id: "enhance", label: "Enhance", detailJa: "AI / Crisp超解像", detailEn: "AI / Crisp upscale" },
   { id: "compress", label: "Compress", detailJa: "圧縮・変換", detailEn: "Compress / convert" },
-  { id: "optimize", label: "Optimize", detailJa: "超解像 + 圧縮", detailEn: "Upscale + compress" },
   { id: "crop", label: "Custom · Crop", detailJa: "構図つきCustom出力", detailEn: "Custom framed output" },
   { id: "resize", label: "Custom · Resize", detailJa: "指定サイズ縮小", detailEn: "Resize to target" },
   { id: "remove-bg", label: "Cutout · Auto", detailJa: "FeyNoBg背景透過", detailEn: "FeyNoBg transparency" },
@@ -295,7 +295,6 @@ function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; l
 function navModeLabel(operation: NavOperation): string {
   if (operation === "enhance") return "Enhance";
   if (operation === "compress") return "Compress";
-  if (operation === "optimize") return "Optimize";
   if (operation === "crop") return "Custom";
   if (operation === "cutout") return "Cutout";
   return "Vectorize";
@@ -305,22 +304,21 @@ function operationSubtitle(operation: NavOperation, language: ResolvedLanguage):
   if (language === "en") {
     if (operation === "enhance") return "AI / crisp upscaling";
     if (operation === "compress") return "Compress & convert";
-    if (operation === "optimize") return "Upscale + compress";
     if (operation === "crop") return "Size, crop & target";
     if (operation === "cutout") return "Auto BG / object edit";
     return "SVG · illustration / line art";
   }
   return operation === "enhance" ? "AI / くっきり超解像"
     : operation === "compress" ? "超圧縮・変換"
-      : operation === "optimize" ? "超解像 + 圧縮"
-        : operation === "crop" ? "サイズ・構図・容量"
-          : operation === "cutout" ? "自動透過 / クリック編集"
-            : "SVG化 · イラスト/線画";
+      : operation === "crop" ? "サイズ・構図・容量"
+        : operation === "cutout" ? "自動透過 / クリック編集"
+          : "SVG化 · イラスト/線画";
 }
 
 function navOperationFor(operation: Operation): NavOperation {
   if (operation === "remove-bg" || operation === "object-edit") return "cutout";
   if (operation === "resize") return "crop";
+  if (operation === "optimize") return "enhance";
   return operation;
 }
 
@@ -960,7 +958,7 @@ export default function App() {
   const copy = UI_COPY[uiLanguage];
   const tr = useCallback((ja: string, en: string) => (uiLanguage === "ja" ? ja : en), [uiLanguage]);
   const currentShortcutRows = useMemo(() => shortcutRows(uiLanguage), [uiLanguage]);
-  const [operation, setOperation] = useState<Operation>("optimize");
+  const [operation, setOperation] = useState<Operation>("enhance");
   const [cutoutMode, setCutoutMode] = useState<CutoutMode>("auto");
   const [inputPath, setInputPath] = useState("");
   const [outputDirectory, setOutputDirectory] = useState("");
@@ -979,6 +977,7 @@ export default function App() {
   const [selectedFormats, setSelectedFormats] = useState<OutputFormat[]>(["png"]);
   const [modelId, setModelId] = useState("");
   const [capabilities, setCapabilities] = useState<SrCapabilities | null>(null);
+  const [backendCapabilities, setBackendCapabilities] = useState<BackendCapabilities | null>(null);
   const [runtimeChecked, setRuntimeChecked] = useState(false);
   const [installingRuntime, setInstallingRuntime] = useState(false);
   const [job, setJob] = useState<DesktopJobStatus | null>(null);
@@ -1002,6 +1001,10 @@ export default function App() {
   const [sizeCapEnabled, setSizeCapEnabled] = useState(false);
   const [sizeCapValue, setSizeCapValue] = useState(1);
   const [sizeCapUnit, setSizeCapUnit] = useState<"KB" | "MB">("MB");
+  const [enhanceCompressionEnabled, setEnhanceCompressionEnabled] = useState(false);
+  const [enhanceSizeCapEnabled, setEnhanceSizeCapEnabled] = useState(false);
+  const [enhanceSizeCapValue, setEnhanceSizeCapValue] = useState(1);
+  const [enhanceSizeCapUnit, setEnhanceSizeCapUnit] = useState<"KB" | "MB">("MB");
   const [vectorPreset, setVectorPreset] = useState<VectorPreset>("illustration");
   const [vectorDetail, setVectorDetail] = useState<VectorDetail>("balanced");
   const [vectorMaxColors, setVectorMaxColors] = useState(24);
@@ -1078,20 +1081,33 @@ export default function App() {
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
   const activeNavOperation = navOperationFor(operation);
+  const customTargetBytes = operation === "crop" && sizeCapEnabled
+    ? targetBytesFrom(sizeCapValue, sizeCapUnit)
+    : null;
+  const enhanceTargetBytes = operation === "enhance" && enhanceCompressionEnabled && enhanceSizeCapEnabled
+    ? targetBytesFrom(enhanceSizeCapValue, enhanceSizeCapUnit)
+    : null;
+  const compactOutputActive = customTargetBytes != null || enhanceTargetBytes != null;
+  const safeNativeFormats: OutputFormat[] = ["png", "jpeg", "webp", "tiff", "bmp"];
+  const backendAllowedFormats = new Set<OutputFormat>(
+    compactOutputActive
+      ? (backendCapabilities?.compactFormats ?? ["png", "jpeg", "tiff", "bmp"])
+      : (backendCapabilities?.standardFormats ?? safeNativeFormats),
+  );
   const formatOptions = operation === "remove-bg"
     ? BACKGROUND_OUTPUT_FORMATS
     : operation === "object-edit"
       ? (objectAction === "remove-and-fill" ? OBJECT_FILL_OUTPUT_FORMATS : OBJECT_ALPHA_OUTPUT_FORMATS)
       : OUTPUT_FORMATS;
-  const visibleFormatOptions = formatOptions.filter((item) => uiPreferences.formatVisibility[item.id]);
-  const displayedFormatOptions = visibleFormatOptions.length > 0 ? visibleFormatOptions : formatOptions.slice(0, 1);
-  const effectiveFormat: OutputFormat = selectedFormats[0] ?? displayedFormatOptions[0]?.id ?? "png";
+  const availableFormatOptions = formatOptions.filter((item) => backendAllowedFormats.has(item.id));
+  const visibleFormatOptions = availableFormatOptions.filter((item) => uiPreferences.formatVisibility[item.id]);
+  const displayedFormatOptions = visibleFormatOptions.length > 0 ? visibleFormatOptions : availableFormatOptions.slice(0, 1);
+  const effectiveFormat: OutputFormat = operation === "enhance" && !enhanceCompressionEnabled
+    ? "png"
+    : selectedFormats[0] ?? displayedFormatOptions[0]?.id ?? "png";
   const activeComparison = comparisonOutputs.find((entry) => entry.format === comparisonFormat) ?? comparisonOutputs[0] ?? null;
   const displayResult = operation === "crop" ? result : activeComparison?.result ?? result;
   const displayOutputPreview = activeComparison?.preview ?? outputPreview;
-  const customTargetBytes = operation === "crop" && sizeCapEnabled
-    ? targetBytesFrom(sizeCapValue, sizeCapUnit)
-    : null;
   const selectedModeHelp = MODE_HELP[srMode];
   const selectedModelHelp = modelHelp(modelId);
   const batchCapable = operation !== "crop" && operation !== "object-edit";
@@ -1113,7 +1129,7 @@ export default function App() {
       if (next.length > 0) return next;
       return displayedFormatOptions[0] ? [displayedFormatOptions[0].id] : ["png"];
     });
-  }, [objectAction, operation, uiPreferences.formatVisibility]);
+  }, [backendCapabilities, customTargetBytes, enhanceCompressionEnabled, enhanceTargetBytes, objectAction, operation, uiPreferences.formatVisibility]);
 
   const loadInput = useCallback(async (path: string) => {
     if (!path) return false;
@@ -1170,6 +1186,9 @@ export default function App() {
 
   useEffect(() => {
     void refreshCapabilities();
+    void invoke<BackendCapabilities>("backend_capabilities_command")
+      .then(setBackendCapabilities)
+      .catch(() => setBackendCapabilities(null));
   }, [refreshCapabilities]);
 
   const refreshBackgroundRuntime = useCallback(async () => {
@@ -1503,9 +1522,12 @@ export default function App() {
   }, [outputDirectory, tr]);
 
   const runOne = useCallback(async (path: string, destination: string, targetFormat: OutputFormat): Promise<DesktopJobStatus | null> => {
-    const useCompact = operation === "crop" && customTargetBytes != null;
+    const enhanceWithCompression = operation === "enhance" && enhanceCompressionEnabled;
+    const requestOperation: Operation = enhanceWithCompression ? "optimize" : operation;
+    const activeTargetBytes = operation === "crop" ? customTargetBytes : enhanceWithCompression ? enhanceTargetBytes : null;
+    const useCompact = activeTargetBytes != null;
     const request: DesktopJobRequest = {
-      operation,
+      operation: requestOperation,
       inputPath: path,
       outputPath: destination,
       scale,
@@ -1513,13 +1535,13 @@ export default function App() {
       compressionMode: useCompact ? "compact" : compressionModeFor(targetFormat),
       format: targetFormat,
       modelId: srPreset === "graphics" ? null : modelId || null,
-      srPreset: operation === "enhance" || operation === "optimize" ? srPreset : null,
+      srPreset: requestOperation === "enhance" || requestOperation === "optimize" ? srPreset : null,
       targetWidth: operation === "crop" || operation === "resize" ? targetWidth : null,
       targetHeight: operation === "crop" || operation === "resize" ? targetHeight : null,
       cropZoom: operation === "crop" ? cropZoom : null,
       cropX: operation === "crop" ? cropX : null,
       cropY: operation === "crop" ? cropY : null,
-      targetBytes: operation === "crop" ? customTargetBytes : null,
+      targetBytes: activeTargetBytes,
       vectorPreset: operation === "vectorize" ? vectorPreset : null,
       vectorDetail: operation === "vectorize" ? vectorDetail : null,
       vectorMaxColors: operation === "vectorize" && vectorPreset !== "line-art" ? vectorMaxColors : null,
@@ -1531,7 +1553,7 @@ export default function App() {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
       const startedAt = Date.now();
       setClock(startedAt);
-      setJobTiming({ startedAt, estimatedMs: estimateDurationMs(timingInfo, operation, scale) });
+      setJobTiming({ startedAt, estimatedMs: estimateDurationMs(timingInfo, requestOperation, scale) });
       const jobId = await invoke<string>("start_job_command", { request });
       let next: DesktopJobStatus = { jobId, state: "queued", fraction: 0, stage: "queued" };
       setJob(next);
@@ -1540,32 +1562,34 @@ export default function App() {
         next = await invoke<DesktopJobStatus>("job_status_command", { jobId });
         setJob(next);
       }
-      if (next.state === "completed") {
-        if (next.result) {
-          setResult(next.result);
-          setOutputResults((current) => [...current, next.result!]);
-          if (uiPreferences.outputAliasEnabled) {
-            try {
-              await invoke<string>("create_output_alias_command", { outputPath: next.result.outputPath });
-            } catch (cause) {
-              setError(`${tr("画像は保存済みですが、エイリアス作成に失敗しました。", "The image was saved, but creating its alias failed.")} ${errorText(cause)}`);
-            }
-          }
-        }
-        if (next.result?.outputPath) {
-          let preview = "";
+      if (next.state === "completed" && next.result) {
+        setResult(next.result);
+        setOutputResults((current) => [...current, next.result!]);
+
+        let preview = "";
+        try {
+          preview = await invoke<string>("preview_image_command", { path: next.result.outputPath });
+        } catch {
+          await delay(80);
           try {
             preview = await invoke<string>("preview_image_command", { path: next.result.outputPath });
-            setOutputPreview(preview);
-          } catch {
-            setOutputPreview("");
+          } catch (cause) {
+            const message = `${tr("処理は完了しましたが、Afterプレビューを生成できませんでした。", "Processing completed, but the After preview could not be generated.")} ${errorText(cause)}`;
+            setError((current) => current ? `${current} / ${message}` : message);
           }
-          if (next.result) {
-            const comparisonEntry: FormatComparisonOutput = { format: targetFormat, result: next.result, preview };
-            setComparisonOutputs((current) => [
-              ...current.filter((entry) => entry.format !== targetFormat),
-              comparisonEntry,
-            ]);
+        }
+        setOutputPreview(preview);
+        setComparisonOutputs((current) => [
+          ...current.filter((entry) => entry.format !== targetFormat),
+          { format: targetFormat, result: next.result!, preview },
+        ]);
+
+        if (uiPreferences.outputAliasEnabled) {
+          try {
+            await invoke<string>("create_output_alias_command", { outputPath: next.result.outputPath });
+          } catch (cause) {
+            const message = `${tr("画像は保存済みですが、エイリアス作成に失敗しました。", "The image was saved, but creating its alias failed.")} ${errorText(cause)}`;
+            setError((current) => current ? `${current} / ${message}` : message);
           }
         }
       }
@@ -1580,10 +1604,10 @@ export default function App() {
         error: { code: "desktop_request_error", message: errorText(cause) },
       };
     }
-  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, modelId, objectAction, operation, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
+  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, enhanceCompressionEnabled, enhanceTargetBytes, modelId, objectAction, operation, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
-    if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
+    if (running || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0)) return;
     if (operation === "remove-bg" && !backgroundRuntime?.installed) {
       setError(tr("FeyNoBg runtimeを先にインストールしてください。", "Install the FeyNoBg runtime first."));
       return;
@@ -1598,9 +1622,11 @@ export default function App() {
         return;
       }
     }
-    const runFormats: OutputFormat[] = operation === "vectorize"
+    const runFormats: OutputFormat[] = operation === "enhance" && !enhanceCompressionEnabled
       ? ["png"]
-      : operation === "remove-bg"
+      : operation === "vectorize"
+        ? ["png"]
+        : operation === "remove-bg"
         ? selectedFormats.filter((format) => format === "png" || format === "webp")
         : operation === "object-edit"
           ? selectedFormats.filter((format) => objectAction === "remove-and-fill"
@@ -1774,11 +1800,15 @@ export default function App() {
       ? tr("FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。", "FeyNoBg estimates a foreground alpha matte and exports transparency while preserving the original pixel dimensions. PNG and WebP are supported.")
     : operation === "object-edit"
       ? tr("SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。", "Select any object with SAM 2.1 Base+, then adjust the mask with expand/contract and feathering. Transparency uses the SAM mask; natural removal uses LaMa to reconstruct the background.")
-    : (operation === "enhance" || operation === "optimize") && srPreset === "graphics" && scale > 1
+    : operation === "enhance" && srPreset === "graphics" && scale > 1
       ? tr("Crisp Graphicsは写真向けAI補完を使わず、輪郭保持リサイズと軽いシャープ処理でロゴ/アイコンを拡大します。元にない模様を作らないことを優先します。", "Crisp Graphics bypasses photo-oriented AI and enlarges logos/icons with edge-preserving resize plus light sharpening, prioritizing source geometry over invented detail.")
       : operation === "crop" && customTargetBytes != null
         ? tr(`最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`, `Automatically adjusts quality to prioritize the ${bytes(customTargetBytes)} maximum. If exact PNG output cannot meet the limit, Agent-2D fails explicitly instead of silently degrading it.`)
-        : selectedFormats.map(formatQualityText).join(" · ");
+        : operation === "enhance" && !enhanceCompressionEnabled
+          ? tr("超解像のみ · PNG lossless", "Enhancement only · PNG lossless")
+          : operation === "enhance" && enhanceTargetBytes != null
+            ? tr(`超解像後に最大 ${bytes(enhanceTargetBytes)} を目標に圧縮します。`, `After enhancement, compress toward a maximum of ${bytes(enhanceTargetBytes)}.`)
+            : selectedFormats.map(formatQualityText).join(" · ");
 
   const elapsedMs = jobTiming ? Math.max(0, clock - jobTiming.startedAt) : 0;
   const adaptiveTotalMs = jobTiming
@@ -1801,7 +1831,9 @@ export default function App() {
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
     : operation === "vectorize"
       ? withSvgExtension(outputName)
-      : (operation === "remove-bg"
+      : operation === "enhance" && !enhanceCompressionEnabled
+        ? withExtension(outputName, "png")
+        : (operation === "remove-bg"
         ? selectedFormats.filter((format) => format === "png" || format === "webp")
         : operation === "object-edit"
           ? selectedFormats.filter((format) => objectAction === "remove-and-fill"
@@ -2275,7 +2307,7 @@ export default function App() {
         document.body,
       )}
 
-      {runtimeChecked && !capabilities && (operation === "enhance" || operation === "optimize") && srPreset !== "graphics" && (
+      {runtimeChecked && !capabilities && operation === "enhance" && srPreset !== "graphics" && (
         <div className="runtime-alert">
           <span>{tr("Real-ESRGAN runtime未導入", "Real-ESRGAN runtime is not installed")}</span>
           <button className="runtime-install" onClick={installManagedRuntime} disabled={installingRuntime}>
@@ -2596,7 +2628,7 @@ export default function App() {
             </>
           )}
 
-          {(operation === "enhance" || operation === "optimize") && (
+          {operation === "enhance" && (
             <>
               <div className="section-label">SUPER RESOLUTION</div>
               <div className={`sr-content-field ${srPreset === "graphics" ? "crisp" : ""}`}>
@@ -2641,7 +2673,7 @@ export default function App() {
                   </select>
                 </div>
               </div>
-              {scale === 1 && <div className="scale-note">{tr("1×ではSR child processを起動せず、寸法を完全維持して変換 / 圧縮のみ行います。", "At 1×, Agent-2D skips the SR child process and only converts or compresses while preserving dimensions exactly.")}</div>}
+              {scale === 1 && <div className="scale-note">{enhanceCompressionEnabled ? tr("1×ではSRを起動せず、寸法を維持したまま圧縮 / 変換だけを行います。", "At 1×, Agent-2D skips SR and only compresses / converts while preserving dimensions.") : tr("1×ではSRを起動せず、寸法を維持したPNGを出力します。", "At 1×, Agent-2D skips SR and outputs a PNG at the original dimensions.")}</div>}
               <div className="field-control field sr-model-field">
                 <div className="field-title">
                   <span>Model</span>
@@ -2663,10 +2695,38 @@ export default function App() {
                   {capabilities?.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
                 </select>
               </div>
+
+              <div className={`size-cap-card enhance-compression-card ${enhanceCompressionEnabled ? "active" : ""}`}>
+                <label className="size-cap-toggle">
+                  <input type="checkbox" checked={enhanceCompressionEnabled} onChange={(event) => setEnhanceCompressionEnabled(event.target.checked)} disabled={running} />
+                  <span>{tr("圧縮も一緒に実行", "Compress after enhancement")}</span>
+                </label>
+                <p>{enhanceCompressionEnabled ? tr("超解像の完了後、そのまま選択形式へ圧縮 / 変換します。", "After enhancement finishes, the result is compressed / converted to the selected format.") : tr("OFFでは超解像結果をPNGでそのまま出力します。", "When off, the enhanced result is output directly as PNG.")}</p>
+                {enhanceCompressionEnabled && (
+                  <>
+                    <div className="section-label compact-label">COMPRESSION</div>
+                    <div className="quality-note">{selectedFormats.map(formatQualityText).join(" · ")}</div>
+                    <label className="size-cap-toggle nested-toggle">
+                      <input type="checkbox" checked={enhanceSizeCapEnabled} onChange={(event) => setEnhanceSizeCapEnabled(event.target.checked)} disabled={running} />
+                      <span>{tr("最大ファイルサイズを指定", "Set maximum file size")}</span>
+                    </label>
+                    {enhanceSizeCapEnabled && (
+                      <div className="size-cap-fields">
+                        <NumberStepper value={enhanceSizeCapValue} onChange={setEnhanceSizeCapValue} min={0.01} step={0.05} disabled={running} ariaLabel={tr("Enhance後の最大ファイルサイズ", "Maximum file size after enhancement")} language={uiLanguage} />
+                        <select value={enhanceSizeCapUnit} onChange={(event) => setEnhanceSizeCapUnit(event.target.value as "KB" | "MB")} disabled={running}>
+                          <option value="KB">KB</option>
+                          <option value="MB">MB</option>
+                        </select>
+                        <strong>≤ {bytes(enhanceTargetBytes)}</strong>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </>
           )}
 
-          {operation !== "vectorize" && (
+          {operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && (
             <>
               <div className="section-label">OUTPUT FORMATS</div>
               <div className={`format-selector ${operation === "remove-bg" || operation === "object-edit" ? "alpha-only" : ""}`} role="group" aria-label={tr("出力形式を複数選択", "Select output formats")}>
@@ -2704,13 +2764,13 @@ export default function App() {
             <input
               value={multiMode ? tr("入力名-agent2d-*（自動）", "input-name-agent2d-* (automatic)") : outputName}
               onChange={(event) => { setOutputName(event.target.value); setOutputPath(""); }}
-              placeholder="image-agent2d-optimized"
+              placeholder="image-agent2d-enhanced"
               disabled={running || multiMode}
             />
           </label>
           <div className="output-preview-line">
             <span>{copy.finalName}</span>
-            <code>{multiMode ? tr(`各入力名 → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…`, `Each input name → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / conflicts use _02, _03…`) : visibleOutputName}</code>
+            <code>{multiMode ? tr(`各入力名 → ${operation === "vectorize" ? "SVG" : operation === "enhance" && !enhanceCompressionEnabled ? "PNG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…`, `Each input name → ${operation === "vectorize" ? "SVG" : operation === "enhance" && !enhanceCompressionEnabled ? "PNG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / conflicts use _02, _03…`) : visibleOutputName}</code>
           </div>
           {outputPath && <div className="resolved-output" title={outputPath}>{tr("保存先", "Destination")}: {outputPath}</div>}
           {outputResults.length > 1 && (
@@ -2726,15 +2786,15 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || tr("時間を計測中", "Measuring time")}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || tr("時間を計測中", "Measuring time")}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : operation === "enhance" ? `${scale === 1 ? "SR skip" : `${scale}×`} · ${enhanceCompressionEnabled ? `${selectedFormats.length} format${enhanceTargetBytes ? ` · ≤${bytes(enhanceTargetBytes)}` : ""}` : "PNG"}` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
           {error && <div className="error-box">{error}</div>}
 
           <div className="action-row">
-            <button className="primary" onClick={start} disabled={running || objectMaskLoading || (operation !== "vectorize" && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (operation === "object-edit" && (!objectRuntime?.installed || (objectPoints.length === 0 && !objectBox))) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : operation === "object-edit" ? (objectAction === "remove-and-fill" ? "Remove & Fill" : objectAction === "keep-selected" ? "Keep Selected" : "Make Transparent") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
+            <button className="primary" onClick={start} disabled={running || objectMaskLoading || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (operation === "object-edit" && (!objectRuntime?.installed || (objectPoints.length === 0 && !objectBox))) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
+              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : operation === "object-edit" ? (objectAction === "remove-and-fill" ? "Remove & Fill" : objectAction === "keep-selected" ? "Keep Selected" : "Make Transparent") : operation === "enhance" && !enhanceCompressionEnabled ? (multiMode ? `Enhance ${queue.length} images · PNG` : "Enhance · PNG") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>

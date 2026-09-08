@@ -15,8 +15,8 @@ use agent2d_core::{
     CompressionMode, CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult,
     JobState, ObjectEditAction, ObjectEditRequest, ObjectSelection, ObjectSelectionRequest,
     ObjectSelectionResult, OptimizeRequest, OutputFormat, SuperResolutionMode, SuperResolutionPreset,
-    UpscaleOptions, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest, cleanup_output, inspect_image,
-    validate_output_path,
+    UpscaleOptions, UpscaleRequest, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest,
+    backend_available, backend_command_path, cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_pipeline::{
     BackgroundRuntimeStatus, ObjectEditRuntimeStatus, background_runtime_status,
@@ -25,7 +25,7 @@ use agent2d_pipeline::{
     remove_background_with_cancel, segment_object_mask, vectorize_image_with_cancel,
     warm_object_edit_runtime,
 };
-use agent2d_sr::{SrCapabilities, capabilities, install_runtime};
+use agent2d_sr::{SrCapabilities, capabilities, install_runtime, upscale_image_with_cancel};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,17 @@ use tauri::{
 use uuid::Uuid;
 
 const MAX_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendCapabilities {
+    ffmpeg: bool,
+    ffprobe: bool,
+    cwebp: bool,
+    cjxl: bool,
+    standard_formats: Vec<&'static str>,
+    compact_formats: Vec<&'static str>,
+}
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -236,7 +247,10 @@ fn run_transform_to_png(
     if cancellation.is_cancelled() {
         return Err(Agent2DError::Cancelled);
     }
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg = backend_command_path("ffmpeg").ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: "ffmpeg".into(),
+    })?;
+    let mut child = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-n", "-i"])
         .arg(input)
         .args(["-vf", filter, "-frames:v", "1", "-c:v", "png"])
@@ -376,29 +390,44 @@ fn execute_job(
     let compression_mode = parse_compression_mode(&request.compression_mode)?;
 
     match request.operation {
-        DesktopOperation::Enhance => optimize_image_with_cancel(
-            &OptimizeRequest {
-                input_path,
-                output_path,
-                upscale: Some(UpscaleOptions {
-                    scale: Some(scale),
-                    target_width: None,
-                    target_height: None,
-                    mode: sr_mode,
-                    preset: sr_preset,
-                    model_id: request.model_id.clone().filter(|value| !value.is_empty()),
-                }),
-                compression: CompressionOptions {
-                    mode: compression_mode,
-                    format: Some(format),
-                    target_bytes: request.target_bytes,
-                },
-            },
-            cancellation,
-        ).map(|mut result| {
-            result.warnings.push("enhance_final_format_applied".into());
-            result
-        }),
+        DesktopOperation::Enhance => {
+            if format != OutputFormat::Png {
+                return Err(Agent2DError::UnsupportedCompression {
+                    mode: "enhance_without_compression".into(),
+                    format: "png_required".into(),
+                });
+            }
+            if scale == UpscaleScale::X1 {
+                compress_image_with_cancel(
+                    &CompressRequest {
+                        input_path,
+                        output_path,
+                        mode: CompressionMode::Exact,
+                        format: Some(OutputFormat::Png),
+                        target_bytes: None,
+                        preserve_metadata: Some(false),
+                    },
+                    cancellation,
+                ).map(|mut result| {
+                    result.warnings.push("enhance_x1_sr_skipped".into());
+                    result
+                })
+            } else {
+                upscale_image_with_cancel(
+                    &UpscaleRequest {
+                        input_path,
+                        output_path,
+                        scale: Some(scale),
+                        target_width: None,
+                        target_height: None,
+                        mode: sr_mode,
+                        preset: sr_preset,
+                        model_id: request.model_id.clone().filter(|value| !value.is_empty()),
+                    },
+                    cancellation,
+                )
+            }
+        },
         DesktopOperation::Compress => compress_image_with_cancel(
             &CompressRequest {
                 input_path,
@@ -522,6 +551,35 @@ fn capabilities_command() -> Result<SrCapabilities, ErrorPayload> {
 }
 
 #[tauri::command]
+fn backend_capabilities_command() -> BackendCapabilities {
+    let ffmpeg = backend_available("ffmpeg");
+    let ffprobe = backend_available("ffprobe");
+    let cwebp = backend_available("cwebp");
+    let cjxl = backend_available("cjxl");
+    let mut standard_formats = vec!["png", "jpeg", "webp", "tiff", "bmp"];
+    let mut compact_formats = vec!["png", "jpeg", "tiff", "bmp"];
+    if cwebp {
+        compact_formats.push("webp");
+    }
+    if ffmpeg && ffprobe {
+        standard_formats.push("avif");
+        compact_formats.push("avif");
+    }
+    if cjxl && ffmpeg && ffprobe {
+        standard_formats.push("jxl");
+        compact_formats.push("jxl");
+    }
+    BackendCapabilities {
+        ffmpeg,
+        ffprobe,
+        cwebp,
+        cjxl,
+        standard_formats,
+        compact_formats,
+    }
+}
+
+#[tauri::command]
 fn install_runtime_command() -> Result<SrCapabilities, ErrorPayload> {
     install_runtime()
         .and_then(|_| capabilities())
@@ -636,7 +694,9 @@ fn preview_image_command(path: String) -> Result<String, ErrorPayload> {
         return Ok(format!("data:image/png;base64,{}", STANDARD.encode(encoded.into_inner())));
     }
     if extension == "jxl" {
-        let output = Command::new("ffmpeg")
+        let ffmpeg = backend_command_path("ffmpeg")
+            .ok_or_else(|| internal_error("JXL preview backend is unavailable: ffmpeg"))?;
+        let output = Command::new(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-i"])
             .arg(path_ref)
             .args([
@@ -649,7 +709,7 @@ fn preview_image_command(path: String) -> Result<String, ErrorPayload> {
                 "pipe:1",
             ])
             .output()
-            .map_err(|error| internal_error(format!("JXL preview requires ffmpeg: {error}")))?;
+            .map_err(|error| internal_error(format!("JXL preview failed to start ffmpeg: {error}")))?;
         if !output.status.success() {
             return Err(internal_error("failed to decode JXL preview"));
         }
@@ -935,6 +995,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             inspect_image_command,
             capabilities_command,
+            backend_capabilities_command,
             install_runtime_command,
             background_runtime_status_command,
             install_background_runtime_command,
@@ -1119,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn enhance_x1_can_finish_as_jpeg() {
+    fn optimize_x1_can_finish_as_jpeg() {
         let dir = std::env::temp_dir().join(format!("agent2d-enhance-format-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&dir).unwrap();
         let input = dir.join("source.png");
@@ -1129,7 +1190,7 @@ mod tests {
             return;
         }
         let request = DesktopJobRequest {
-            operation: DesktopOperation::Enhance,
+            operation: DesktopOperation::Optimize,
             input_path: input.to_string_lossy().into_owned(),
             output_path: output.to_string_lossy().into_owned(),
             scale: 1,
@@ -1154,6 +1215,47 @@ mod tests {
         let result = execute_job(&request, &CancellationToken::new()).unwrap();
         assert_eq!((result.output_width, result.output_height), (160, 90));
         assert_eq!(result.codec.as_deref(), Some("jpeg"));
+        assert!(output.is_file());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enhance_x1_outputs_png_without_compression_pipeline() {
+        let dir = std::env::temp_dir().join(format!("agent2d-enhance-png-test-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let input = dir.join("source.png");
+        let output = dir.join("enhanced.png");
+        if !make_ffmpeg_fixture(&input, 160, 90) {
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let request = DesktopJobRequest {
+            operation: DesktopOperation::Enhance,
+            input_path: input.to_string_lossy().into_owned(),
+            output_path: output.to_string_lossy().into_owned(),
+            scale: 1,
+            sr_mode: "balanced".into(),
+            compression_mode: "exact".into(),
+            format: "png".into(),
+            model_id: None,
+            sr_preset: None,
+            target_width: None,
+            target_height: None,
+            crop_zoom: None,
+            crop_x: None,
+            crop_y: None,
+            target_bytes: None,
+            vector_preset: None,
+            vector_detail: None,
+            vector_max_colors: None,
+            vector_threshold: None,
+            object_action: None,
+            object_selection: None,
+        };
+        let result = execute_job(&request, &CancellationToken::new()).unwrap();
+        assert_eq!((result.output_width, result.output_height), (160, 90));
+        assert_eq!(result.codec.as_deref(), Some("png"));
+        assert!(result.warnings.iter().any(|warning| warning == "enhance_x1_sr_skipped"));
         assert!(output.is_file());
         let _ = fs::remove_dir_all(&dir);
     }

@@ -11,7 +11,7 @@ use agent2d_compression::compress_image_with_cancel;
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CustomRequest, InspectRequest,
     OptimizeRequest, UpscaleRequest, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest,
-    cleanup_output, inspect_image, validate_output_path,
+    backend_command_path, cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_sr::upscale_image_with_cancel;
 use tempfile::tempdir;
@@ -69,7 +69,10 @@ fn run_transform_to_png(
     if cancellation.is_cancelled() {
         return Err(Agent2DError::Cancelled);
     }
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg = backend_command_path("ffmpeg").ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: "ffmpeg".into(),
+    })?;
+    let mut child = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-n", "-i"])
         .arg(input)
         .args(["-vf", filter, "-frames:v", "1", "-c:v", "png"])

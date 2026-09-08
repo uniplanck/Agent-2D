@@ -9,8 +9,8 @@ use std::{
 
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, InspectRequest, SuperResolutionMode,
-    SuperResolutionPreset, UpscaleRequest, UpscaleScale, cleanup_output, inspect_image,
-    validate_output_path,
+    SuperResolutionPreset, UpscaleRequest, UpscaleScale, backend_command_path, cleanup_output,
+    inspect_image, validate_output_path,
 };
 use image::{DynamicImage, GenericImageView, imageops::{self, FilterType}};
 use serde::{Deserialize, Serialize};
@@ -328,7 +328,10 @@ fn prepare_sr_input(
         return Ok(None);
     }
     let temp = std::env::temp_dir().join(format!("agent2d-sr-input-{}.png", Uuid::new_v4()));
-    let mut child = Command::new("ffmpeg")
+    let ffmpeg = backend_command_path("ffmpeg").ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: "ffmpeg".into(),
+    })?;
+    let mut child = Command::new(ffmpeg)
         .args(["-hide_banner", "-loglevel", "error", "-n", "-i"])
         .arg(input)
         .args(["-frames:v", "1", "-c:v", "png"])

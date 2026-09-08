@@ -29,14 +29,13 @@ The same Rust processing core powers the Desktop app, CLI, and MCP server. Image
 
 | Capability | What it does | Main engine |
 | --- | --- | --- |
-| **Enhance** | 1× / 2× / 4× AI super resolution or deterministic **Crisp Graphics** scaling for tiny logos/icons | Real-ESRGAN + NCNN/Vulkan / local edge-preserving scaler |
+| **Enhance** | 1× / 2× / 4× AI super resolution or deterministic **Crisp Graphics** scaling for tiny logos/icons, with optional compression after enhancement | Real-ESRGAN + NCNN/Vulkan / local edge-preserving scaler + shared Rust compression pipeline |
 | **Compress** | Compress or convert while preserving dimensions | Rust image pipeline + local codecs |
-| **Optimize** | Super resolution followed by compression | Shared Rust pipeline |
 | **Custom** | Exact output size, framing, zoom, position, ⅛× / ¼× / ½× / 1× / 2× / 4× source-relative presets, Custom scale, and optional target file size | Shared Rust pipeline |
 | **Cutout** | Two sidebar modes: automatic background removal or click/box object editing and erase-and-fill | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | Convert logos, icons, line art, and flat illustrations to real SVG paths | VTracer |
 
-Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary visible formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The selected operation still controls which formats are valid. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, multiple UI themes, and Japanese/English application UI are included.
+Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The Desktop app automatically hides codec-dependent formats when their required local backend is unavailable. **Optimize is no longer a separate Desktop tab**: use **Enhance → Compress after enhancement** to run the same super-resolution → compression pipeline. The CLI/MCP optimize contract remains available. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, multiple UI themes, and Japanese/English application UI are included.
 
 ### Interfaces
 
@@ -230,14 +229,13 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 | 機能 | 内容 | 主なエンジン |
 | --- | --- | --- |
-| **Enhance** | 1× / 2× / 4×のAI超解像、または極小ロゴ/アイコン向けの**Crisp Graphics**拡大 | Real-ESRGAN + NCNN/Vulkan / ローカル輪郭保持scaler |
+| **Enhance** | 1× / 2× / 4×のAI超解像、または極小ロゴ/アイコン向けの**Crisp Graphics**拡大。必要なら超解像後の圧縮も同時実行 | Real-ESRGAN + NCNN/Vulkan / ローカル輪郭保持scaler + 共通Rust圧縮pipeline |
 | **Compress** | 解像度を維持した圧縮・形式変換 | Rust画像処理 + ローカルcodec |
-| **Optimize** | 超解像のあとに圧縮 | 共通Rust pipeline |
 | **Custom** | 指定サイズ、構図、Zoom、位置、⅛× / ¼× / ½× / 1× / 2× / 4×の倍率Preset、Custom倍率、最大ファイル容量 | 共通Rust pipeline |
 | **Cutout** | サイドバーの2モードから、自動背景透過またはクリック/Box選択・透明化・自然削除を選ぶ | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | ロゴ・アイコン・線画・フラットイラストをSVG pathへ変換 | VTracer |
 
-標準表示する主要形式はPNG、JPEG、WebP、AVIF、JPEG XLの5種です。加えてTIFFとBMPをlossless形式として利用でき、**設定 → 出力形式**から表示/非表示を切り替えられます。処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もできます。DesktopではBefore / After比較、Theme切替、編集可能なKeyboard Shortcut、日本語/英語UIも利用できます。
+主要形式はPNG、JPEG、WebP、AVIF、JPEG XLの5種です。加えてTIFFとBMPをlossless形式として利用でき、**設定 → 出力形式**から表示/非表示を切り替えられます。Desktopでは必要なローカルcodec backendが存在しない形式を自動で非表示にします。**OptimizeはDesktopの独立タブから外し、Enhance内の「圧縮も一緒に実行」に統合**しました。CLI / MCPのoptimize contractは互換性のため残しています。処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もでき、Before / After比較、Theme切替、編集可能なKeyboard Shortcut、日本語/英語UIも利用できます。
 
 ### なぜローカルで動かすのか
 

@@ -144,6 +144,15 @@ export interface SrCapabilities {
   models: ModelDescriptor[];
 }
 
+export interface BackendCapabilities {
+  ffmpeg: boolean;
+  ffprobe: boolean;
+  cwebp: boolean;
+  cjxl: boolean;
+  standardFormats: OutputFormat[];
+  compactFormats: OutputFormat[];
+}
+
 export interface BackgroundRuntimeStatus {
   installed: boolean;
   managed: boolean;

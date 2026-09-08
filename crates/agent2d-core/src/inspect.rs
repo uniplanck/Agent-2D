@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 use image::{ColorType, GenericImageView, ImageFormat, ImageReader};
 use uuid::Uuid;
 
-use crate::{Agent2DError, InspectRequest, InspectResult};
+use crate::{Agent2DError, InspectRequest, InspectResult, backend_command_path};
 
 pub fn inspect_image(request: &InspectRequest) -> Result<InspectResult, Agent2DError> {
     let path = request.input_path.as_path();
@@ -101,7 +101,10 @@ fn inspect_with_ffprobe(
     input_bytes: u64,
     format: &str,
 ) -> Result<InspectResult, Agent2DError> {
-    let output = Command::new("ffprobe")
+    let ffprobe = backend_command_path("ffprobe").ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: "ffprobe".into(),
+    })?;
+    let output = Command::new(ffprobe)
         .args([
             "-v",
             "error",

@@ -33,7 +33,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .runtime-install { min-height: 34px; border: 1px solid rgba(224,177,84,.35); background: rgba(224,177,84,.09); color: #e8cf9b; border-radius: 999px; padding: 6px 11px; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
 .runtime-install:hover:not(:disabled) { background: rgba(224,177,84,.16); }
 
-.mode-tabs { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 4px; border: 1px solid rgba(40,54,74,.72); border-radius: 13px; background: rgba(8, 12, 19, .72); }
+.mode-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; padding: 4px; border: 1px solid rgba(40,54,74,.72); border-radius: 13px; background: rgba(8, 12, 19, .72); }
 .mode-tabs button { min-height: 48px; border: 1px solid transparent; border-radius: 9px; background: transparent; cursor: pointer; color: #8998af; font-size: 12px; font-weight: 700; transition: 140ms ease; }
 .mode-tabs button small { display: block; margin-top: 2px; color: #607089; font-size: 9px; font-weight: 600; letter-spacing: .04em; }
 .mode-tabs button:hover:not(:disabled) { background: rgba(255,255,255,.025); color: #a8b6cc; }
@@ -422,7 +422,7 @@ select:disabled, input:disabled { opacity: .65; }
   .source-multiplier-input { grid-column: 1 / 4; }
   .source-multiplier-tools > button:last-child { grid-column: 4; }
   .app-shell { padding: 14px; }
-  .mode-tabs { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .mode-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
   .mode-tabs button { min-width: 0; padding-inline: 4px; font-size: 11px; }
   .mode-tabs button small { font-size: 8px; }
   .workspace-grid { grid-template-columns: 292px 1fr; }

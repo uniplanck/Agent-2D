@@ -9,11 +9,15 @@ use std::{
 
 use agent2d_core::{
     Agent2DError, Agent2DResult, CancellationToken, CompressRequest, CompressionMode,
-    InspectRequest, OutputFormat, cleanup_output, inspect_image, validate_output_path,
+    InspectRequest, OutputFormat, backend_command_path, cleanup_output, inspect_image,
+    validate_output_path,
 };
 use image::{
     ColorType, GenericImageView, ImageEncoder, ImageFormat,
-    codecs::png::{CompressionType, FilterType, PngEncoder},
+    codecs::{
+        jpeg::JpegEncoder,
+        png::{CompressionType, FilterType, PngEncoder},
+    },
 };
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -61,7 +65,7 @@ pub fn compress_image_with_cancel(
             Some(true)
         }
         (CompressionMode::Exact, OutputFormat::Webp) => {
-            run_cwebp_lossless(&request.input_path, &request.output_path, cancellation)?;
+            encode_lossless_raster(&request.input_path, &request.output_path, ImageFormat::WebP, cancellation)?;
             verify_pixel_exact(&request.input_path, &request.output_path)?;
             Some(true)
         }
@@ -86,7 +90,7 @@ pub fn compress_image_with_cancel(
             Some(false)
         }
         (CompressionMode::Preserve, OutputFormat::Jpeg) => {
-            run_ffmpeg_jpeg_preserve(&request.input_path, &request.output_path, cancellation)?;
+            encode_jpeg_quality(&request.input_path, &request.output_path, 95, cancellation)?;
             warnings.push("jpeg_preserve_is_high_quality_lossy_not_pixel_exact".to_owned());
             if input.has_alpha {
                 warnings.push("jpeg_output_drops_alpha".to_owned());
@@ -299,27 +303,39 @@ fn encode_png_exact(
     })
 }
 
-fn run_cwebp_lossless(
+fn encode_jpeg_quality(
     input: &Path,
     output: &Path,
+    quality: u8,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
     let prepared = prepare_png_for_backend(input, cancellation, &["avif", "jxl"])?;
     let source = prepared.as_deref().unwrap_or(input);
-    let result = run_backend(
-        "cwebp",
-        vec![
-            "-quiet".into(),
-            "-lossless".into(),
-            "-z".into(),
-            "9".into(),
-            source.as_os_str().into(),
-            "-o".into(),
-            output.as_os_str().into(),
-        ],
-        output,
-        cancellation,
-    );
+    let result = (|| {
+        let decoded = image::open(source).map_err(|source_error| Agent2DError::ImageDecode {
+            path: display_path(source),
+            source: source_error,
+        })?;
+        let (width, height) = decoded.dimensions();
+        let rgb = decoded.to_rgb8();
+        let file = File::create(output).map_err(|error| Agent2DError::ImageWrite {
+            path: display_path(output),
+            message: error.to_string(),
+        })?;
+        let encoder = JpegEncoder::new_with_quality(file, quality.clamp(1, 100));
+        encoder
+            .write_image(rgb.as_raw(), width, height, ColorType::Rgb8.into())
+            .map_err(|error| {
+                cleanup_output(output);
+                Agent2DError::ImageWrite {
+                    path: display_path(output),
+                    message: error.to_string(),
+                }
+            })
+    })();
     if let Some(path) = prepared {
         cleanup_output(&path);
     }
@@ -413,14 +429,6 @@ fn run_ffmpeg_avif_preserve(
     )
 }
 
-fn run_ffmpeg_jpeg_preserve(
-    input: &Path,
-    output: &Path,
-    cancellation: &CancellationToken,
-) -> Result<(), Agent2DError> {
-    run_ffmpeg_jpeg_quality(input, output, 2, cancellation)
-}
-
 #[derive(Debug)]
 struct CompactOutcome {
     pixel_exact: Option<bool>,
@@ -475,7 +483,7 @@ fn encode_compact_to_target(
             Err(compact_unreachable(output, format, target_bytes))
         }
         OutputFormat::Webp => {
-            run_cwebp_lossless(input, output, cancellation)?;
+            encode_lossless_raster(input, output, ImageFormat::WebP, cancellation)?;
             if compact_accepts(output, target_bytes)? {
                 return Ok(compact_success(target_bytes, Some(true), "compact_webp_lossless".into()));
             }
@@ -520,15 +528,15 @@ fn encode_compact_to_target(
             Err(compact_unreachable(output, format, target_bytes))
         }
         OutputFormat::Jpeg => {
-            run_ffmpeg_jpeg_quality(input, output, 2, cancellation)?;
+            encode_jpeg_quality(input, output, 95, cancellation)?;
             if compact_accepts(output, target_bytes)? {
-                return Ok(compact_success(target_bytes, Some(false), "compact_jpeg_q_2".into()));
+                return Ok(compact_success(target_bytes, Some(false), "compact_jpeg_quality_95".into()));
             }
             cleanup_output(output);
-            for quality in [3u8, 4, 5, 7, 9, 12, 16, 20, 24, 28, 31] {
-                run_ffmpeg_jpeg_quality(input, output, quality, cancellation)?;
+            for quality in [90u8, 85, 80, 70, 60, 50, 40, 30, 20, 10, 5] {
+                encode_jpeg_quality(input, output, quality, cancellation)?;
                 if compact_accepts(output, target_bytes)? {
-                    return Ok(compact_success(target_bytes, Some(false), format!("compact_jpeg_q_{quality}")));
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_jpeg_quality_{quality}")));
                 }
                 cleanup_output(output);
             }
@@ -646,34 +654,6 @@ fn run_ffmpeg_avif_quality(
     )
 }
 
-fn run_ffmpeg_jpeg_quality(
-    input: &Path,
-    output: &Path,
-    quality: u8,
-    cancellation: &CancellationToken,
-) -> Result<(), Agent2DError> {
-    run_backend(
-        "ffmpeg",
-        vec![
-            "-hide_banner".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-n".into(),
-            "-i".into(),
-            input.as_os_str().into(),
-            "-frames:v".into(),
-            "1".into(),
-            "-c:v".into(),
-            "mjpeg".into(),
-            "-q:v".into(),
-            quality.to_string().into(),
-            output.as_os_str().into(),
-        ],
-        output,
-        cancellation,
-    )
-}
-
 fn prepare_png_for_backend(
     input: &Path,
     cancellation: &CancellationToken,
@@ -705,7 +685,10 @@ fn run_backend(
     output_path: &Path,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
-    let mut child = Command::new(backend)
+    let backend_path = backend_command_path(backend).ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: backend.to_owned(),
+    })?;
+    let mut child = Command::new(backend_path)
         .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -752,7 +735,10 @@ fn run_backend(
 }
 
 fn probe_dimensions(path: &Path) -> Result<(u32, u32), Agent2DError> {
-    let output = Command::new("ffprobe")
+    let ffprobe = backend_command_path("ffprobe").ok_or_else(|| Agent2DError::BackendUnavailable {
+        backend: "ffprobe".into(),
+    })?;
+    let output = Command::new(ffprobe)
         .args([
             "-v",
             "error",
