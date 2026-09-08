@@ -12,7 +12,7 @@ use agent2d_core::{
     InspectRequest, OutputFormat, cleanup_output, inspect_image, validate_output_path,
 };
 use image::{
-    ColorType, GenericImageView, ImageEncoder,
+    ColorType, GenericImageView, ImageEncoder, ImageFormat,
     codecs::png::{CompressionType, FilterType, PngEncoder},
 };
 use sha2::{Digest, Sha256};
@@ -70,6 +70,16 @@ pub fn compress_image_with_cancel(
             verify_pixel_exact(&request.input_path, &request.output_path)?;
             Some(true)
         }
+        (CompressionMode::Exact, OutputFormat::Tiff) => {
+            encode_lossless_raster(&request.input_path, &request.output_path, ImageFormat::Tiff, cancellation)?;
+            verify_pixel_exact(&request.input_path, &request.output_path)?;
+            Some(true)
+        }
+        (CompressionMode::Exact, OutputFormat::Bmp) => {
+            encode_lossless_raster(&request.input_path, &request.output_path, ImageFormat::Bmp, cancellation)?;
+            verify_pixel_exact(&request.input_path, &request.output_path)?;
+            Some(true)
+        }
         (CompressionMode::Preserve, OutputFormat::Avif) => {
             run_ffmpeg_avif_preserve(&request.input_path, &request.output_path, cancellation)?;
             warnings.push("avif_preserve_is_visually_lossless_not_pixel_exact".to_owned());
@@ -124,7 +134,7 @@ pub fn compress_image_with_cancel(
         .len();
 
     let (output_width, output_height) = match format {
-        OutputFormat::Png | OutputFormat::Webp | OutputFormat::Jpeg => {
+        OutputFormat::Png | OutputFormat::Webp | OutputFormat::Jpeg | OutputFormat::Tiff | OutputFormat::Bmp => {
             let decoded =
                 image::open(&request.output_path).map_err(|source| Agent2DError::ImageDecode {
                     path: display_path(&request.output_path),
@@ -228,6 +238,29 @@ fn resolve_output_format(
             format: "format_required".into(),
         }),
     }
+}
+
+fn encode_lossless_raster(
+    input: &Path,
+    output: &Path,
+    format: ImageFormat,
+    cancellation: &CancellationToken,
+) -> Result<(), Agent2DError> {
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let prepared = prepare_png_for_backend(input, cancellation, &["avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let decoded = image::open(source).map_err(|source_error| Agent2DError::ImageDecode {
+        path: display_path(source),
+        source: source_error,
+    })?;
+    let result = decoded.save_with_format(output, format).map_err(|error| Agent2DError::ImageWrite {
+        path: display_path(output),
+        message: error.to_string(),
+    });
+    if let Some(path) = prepared.as_ref() { cleanup_output(path); }
+    result
 }
 
 fn encode_png_exact(
@@ -500,6 +533,22 @@ fn encode_compact_to_target(
                 cleanup_output(output);
             }
             Err(compact_unreachable(output, format, target_bytes))
+        }
+        OutputFormat::Tiff => {
+            encode_lossless_raster(input, output, ImageFormat::Tiff, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                Ok(compact_success(target_bytes, Some(true), "compact_tiff_lossless".into()))
+            } else {
+                Err(compact_unreachable(output, format, target_bytes))
+            }
+        }
+        OutputFormat::Bmp => {
+            encode_lossless_raster(input, output, ImageFormat::Bmp, cancellation)?;
+            if compact_accepts(output, target_bytes)? {
+                Ok(compact_success(target_bytes, Some(true), "compact_bmp_lossless".into()))
+            } else {
+                Err(compact_unreachable(output, format, target_bytes))
+            }
         }
     }
 }
@@ -778,6 +827,8 @@ fn output_format_name(format: OutputFormat) -> &'static str {
         OutputFormat::Webp => "webp",
         OutputFormat::Avif => "avif",
         OutputFormat::Jxl => "jxl",
+        OutputFormat::Tiff => "tiff",
+        OutputFormat::Bmp => "bmp",
     }
 }
 
@@ -838,6 +889,27 @@ mod tests {
         assert_eq!(result.pixel_exact, Some(true));
         assert_eq!(result.input_width, result.output_width);
         assert_eq!(before, pixel_digest(&output).unwrap());
+    }
+
+    #[test]
+    fn tiff_and_bmp_exact_round_trip_are_pixel_exact() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("input.png");
+        write_fixture(&input);
+        let before = pixel_digest(&input).unwrap();
+        for (format, extension) in [(OutputFormat::Tiff, "tiff"), (OutputFormat::Bmp, "bmp")] {
+            let output = dir.path().join(format!("output.{extension}"));
+            let result = compress_image(&request(
+                input.clone(),
+                output.clone(),
+                CompressionMode::Exact,
+                format,
+            ))
+            .unwrap();
+            assert_eq!(result.pixel_exact, Some(true));
+            assert_eq!((result.output_width, result.output_height), (96, 64));
+            assert_eq!(before, pixel_digest(&output).unwrap());
+        }
     }
 
     #[test]

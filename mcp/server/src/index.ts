@@ -34,19 +34,23 @@ const srModeProperty = {
   type: "string",
   enum: ["fidelity", "balanced", "perceptual"],
 } as const;
+const srPresetProperty = {
+  type: "string",
+  enum: ["general", "photo", "illustration", "ai-art", "graphics"],
+} as const;
 const compressionModeProperty = {
   type: "string",
   enum: ["exact", "preserve", "compact"],
 } as const;
 const outputFormatProperty = {
   type: "string",
-  enum: ["png", "jpeg", "webp", "avif", "jxl"],
+  enum: ["png", "jpeg", "webp", "avif", "jxl", "tiff", "bmp"],
 } as const;
 const outputFormatsProperty = {
   type: "array",
   items: outputFormatProperty,
   minItems: 1,
-  maxItems: 5,
+  maxItems: 7,
   uniqueItems: true,
 } as const;
 const backgroundFormatProperty = {
@@ -82,7 +86,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "agent2d_inspect",
-      description: "Inspect a local PNG/JPEG/WebP/AVIF/JXL through the shared Agent-2D Core.",
+      description: "Inspect a local PNG/JPEG/WebP/AVIF/JXL/TIFF/BMP through the shared Agent-2D Core.",
       inputSchema: {
         type: "object",
         properties: { inputPath: pathProperty },
@@ -92,7 +96,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "agent2d_upscale",
-      description: "Enhance a local image. scale=1 preserves dimensions and performs conversion/compression only; scale=2/3/4 uses the NCNN super-resolution backend.",
+      description: "Upscale a local image. scale=1 preserves dimensions; scale=2/3/4 normally uses NCNN super-resolution, while preset=graphics uses the deterministic local Crisp Graphics route for tiny logos/icons.",
       inputSchema: {
         type: "object",
         properties: {
@@ -100,7 +104,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: pathProperty,
           scale: scaleProperty,
           mode: srModeProperty,
-          preset: { type: "string", enum: ["general", "photo", "illustration", "ai-art"] },
+          preset: srPresetProperty,
           modelId: { type: "string", minLength: 1 },
           targetWidth: { type: "integer", minimum: 1 },
           targetHeight: { type: "integer", minimum: 1 },
@@ -111,7 +115,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "agent2d_enhance",
-      description: "Enhance with Agent-2D and choose one or more final output formats. scale=1 preserves dimensions while still applying final conversion/compression.",
+      description: "Enhance with Agent-2D and choose one or more final output formats. preset=graphics bypasses photo-oriented AI for deterministic crisp logo/icon scaling; scale=1 preserves dimensions while still applying final conversion/compression.",
       inputSchema: {
         type: "object",
         properties: {
@@ -119,6 +123,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: pathProperty,
           scale: scaleProperty,
           mode: srModeProperty,
+          preset: srPresetProperty,
           modelId: { type: "string", minLength: 1 },
           format: outputFormatProperty,
           formats: outputFormatsProperty,
@@ -237,7 +242,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "agent2d_optimize",
-      description: "Run Agent-2D optimization. scale=1 skips super-resolution and performs conversion/compression only; higher scales run SR then compression.",
+      description: "Run Agent-2D optimization. scale=1 skips super-resolution; higher scales run SR then compression, and preset=graphics selects deterministic Crisp Graphics scaling before the final encode.",
       inputSchema: {
         type: "object",
         properties: {
@@ -245,6 +250,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           outputPath: pathProperty,
           scale: scaleProperty,
           srMode: srModeProperty,
+          preset: srPresetProperty,
           modelId: { type: "string", minLength: 1 },
           compressionMode: compressionModeProperty,
           format: outputFormatProperty,
@@ -347,6 +353,7 @@ function buildEnhanceArgs(args: Record<string, unknown>): string[] {
     "--mode",
     optionalEnum(args, "mode", ["fidelity", "balanced", "perceptual"], "balanced"),
   ];
+  appendString(command, "--preset", args.preset);
   appendString(command, "--model", args.modelId);
   appendOutputSelection(command, args);
   appendNumber(command, "--target-bytes", args.targetBytes);
@@ -379,7 +386,7 @@ function buildCustomArgs(args: Record<string, unknown>): string[] {
   appendFiniteNumber(command, "--zoom", args.zoom);
   appendFiniteNumber(command, "--x", args.x);
   appendFiniteNumber(command, "--y", args.y);
-  const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
+  const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl", "tiff", "bmp"]);
   command.push("--formats", formats.join(","));
   appendNumber(command, "--max-bytes", args.maxBytes);
   return command;
@@ -461,6 +468,7 @@ function buildOptimizeArgs(args: Record<string, unknown>): string[] {
     "--sr-mode",
     optionalEnum(args, "srMode", ["fidelity", "balanced", "perceptual"], "balanced"),
   ];
+  appendString(command, "--preset", args.preset);
   if (args.compressionMode !== undefined) {
     command.push("--compression-mode", requiredEnum(args, "compressionMode", ["exact", "preserve", "compact"]));
   }
@@ -508,12 +516,12 @@ function appendInteger(command: string[], flag: string, value: unknown): void {
 
 function appendOutputSelection(command: string[], args: Record<string, unknown>): void {
   if (args.formats !== undefined) {
-    const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl"]);
+    const formats = requiredEnumArray(args, "formats", ["png", "jpeg", "webp", "avif", "jxl", "tiff", "bmp"]);
     command.push("--formats", formats.join(","));
     return;
   }
   if (args.format !== undefined) {
-    command.push("--format", requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl"]));
+    command.push("--format", requiredEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl", "tiff", "bmp"]));
   }
 }
 

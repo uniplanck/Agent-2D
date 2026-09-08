@@ -451,7 +451,7 @@ pub fn optimize_image_with_cancel(
             target_width: upscale.target_width,
             target_height: upscale.target_height,
             mode: upscale.mode,
-            preset: None,
+            preset: upscale.preset,
             model_id: upscale.model_id.clone(),
         },
         cancellation,
@@ -532,6 +532,7 @@ mod tests {
                 target_width: None,
                 target_height: None,
                 mode: SuperResolutionMode::Balanced,
+                preset: None,
                 model_id: None,
             }),
             compression: CompressionOptions {
@@ -573,6 +574,7 @@ mod tests {
                 target_width: None,
                 target_height: None,
                 mode: SuperResolutionMode::Balanced,
+                preset: None,
                 model_id: Some("realesrgan-x4plus".into()),
             }),
             compression: CompressionOptions {

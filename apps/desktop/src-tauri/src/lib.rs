@@ -14,8 +14,8 @@ use agent2d_core::{
     Agent2DError, Agent2DResult, BackgroundRemovalRequest, CancellationToken, CompressRequest,
     CompressionMode, CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult,
     JobState, ObjectEditAction, ObjectEditRequest, ObjectSelection, ObjectSelectionRequest,
-    ObjectSelectionResult, OptimizeRequest, OutputFormat, SuperResolutionMode, UpscaleOptions,
-    UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest, cleanup_output, inspect_image,
+    ObjectSelectionResult, OptimizeRequest, OutputFormat, SuperResolutionMode, SuperResolutionPreset,
+    UpscaleOptions, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest, cleanup_output, inspect_image,
     validate_output_path,
 };
 use agent2d_pipeline::{
@@ -63,6 +63,7 @@ struct DesktopJobRequest {
     compression_mode: String,
     format: String,
     model_id: Option<String>,
+    sr_preset: Option<String>,
     target_width: Option<u32>,
     target_height: Option<u32>,
     crop_zoom: Option<f64>,
@@ -137,10 +138,24 @@ fn parse_format(value: &str) -> Result<OutputFormat, Agent2DError> {
         "webp" => Ok(OutputFormat::Webp),
         "avif" => Ok(OutputFormat::Avif),
         "jxl" => Ok(OutputFormat::Jxl),
+        "tif" | "tiff" => Ok(OutputFormat::Tiff),
+        "bmp" => Ok(OutputFormat::Bmp),
         other => Err(Agent2DError::UnsupportedCompression {
             mode: "desktop".into(),
             format: other.into(),
         }),
+    }
+}
+
+fn parse_sr_preset(value: Option<&str>) -> Result<Option<SuperResolutionPreset>, Agent2DError> {
+    match value {
+        None | Some("") => Ok(None),
+        Some("general") => Ok(Some(SuperResolutionPreset::General)),
+        Some("photo") => Ok(Some(SuperResolutionPreset::Photo)),
+        Some("illustration") => Ok(Some(SuperResolutionPreset::Illustration)),
+        Some("ai-art") => Ok(Some(SuperResolutionPreset::AiArt)),
+        Some("graphics") => Ok(Some(SuperResolutionPreset::Graphics)),
+        Some(other) => Err(Agent2DError::UnsupportedUpscale { message: format!("unsupported SR preset: {other}") }),
     }
 }
 
@@ -356,6 +371,7 @@ fn execute_job(
     let output_path = request.output_path.clone().into();
     let scale = parse_scale(request.scale)?;
     let sr_mode = parse_sr_mode(&request.sr_mode)?;
+    let sr_preset = parse_sr_preset(request.sr_preset.as_deref())?;
     let format = parse_format(&request.format)?;
     let compression_mode = parse_compression_mode(&request.compression_mode)?;
 
@@ -369,6 +385,7 @@ fn execute_job(
                     target_width: None,
                     target_height: None,
                     mode: sr_mode,
+                    preset: sr_preset,
                     model_id: request.model_id.clone().filter(|value| !value.is_empty()),
                 }),
                 compression: CompressionOptions {
@@ -402,6 +419,7 @@ fn execute_job(
                     target_width: None,
                     target_height: None,
                     mode: sr_mode,
+                    preset: sr_preset,
                     model_id: request.model_id.clone().filter(|value| !value.is_empty()),
                 }),
                 compression: CompressionOptions {
@@ -608,6 +626,15 @@ fn preview_image_command(path: String) -> Result<String, ErrorPayload> {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_ascii_lowercase())
         .ok_or_else(|| internal_error("unsupported preview image extension"))?;
+    if matches!(extension.as_str(), "tif" | "tiff" | "bmp") {
+        let decoded = image::open(path_ref).map_err(|error| internal_error(format!("failed to decode {extension} preview: {error}")))?;
+        let mut encoded = Cursor::new(Vec::new());
+        decoded.write_to(&mut encoded, ImageFormat::Png).map_err(|error| internal_error(format!("failed to encode preview PNG: {error}")))?;
+        if encoded.get_ref().len() as u64 > MAX_PREVIEW_BYTES {
+            return Err(internal_error("decoded preview exceeds the 64 MiB desktop preview limit"));
+        }
+        return Ok(format!("data:image/png;base64,{}", STANDARD.encode(encoded.into_inner())));
+    }
     if extension == "jxl" {
         let output = Command::new("ffmpeg")
             .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -668,6 +695,8 @@ fn extension_for_output_format(format: &str) -> Result<&'static str, ErrorPayloa
         "webp" => Ok("webp"),
         "avif" => Ok("avif"),
         "jxl" => Ok("jxl"),
+        "tif" | "tiff" => Ok("tiff"),
+        "bmp" => Ok("bmp"),
         "svg" => Ok("svg"),
         other => Err(internal_error(format!("unsupported output format: {other}"))),
     }
@@ -707,6 +736,61 @@ fn resolve_output_path_command(
     format: String,
 ) -> Result<String, ErrorPayload> {
     unique_output_path(Path::new(&directory), &filename, &format)
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn path_is_occupied(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn unique_alias_path(directory: &Path, source: &Path) -> Result<PathBuf, ErrorPayload> {
+    let filename = source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| internal_error("output path has no valid filename"))?;
+    let base = directory.join(filename);
+    if !path_is_occupied(&base) {
+        return Ok(base);
+    }
+    let stem = source
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| internal_error("output path has no valid filename stem"))?;
+    let extension = source.extension().and_then(|value| value.to_str());
+    for index in 2..=9_999 {
+        let filename = match extension {
+            Some(extension) if !extension.is_empty() => format!("{stem}_{index:02}.{extension}"),
+            _ => format!("{stem}_{index:02}"),
+        };
+        let candidate = directory.join(filename);
+        if !path_is_occupied(&candidate) {
+            return Ok(candidate);
+        }
+    }
+    Err(internal_error("could not allocate a unique output alias filename"))
+}
+
+fn create_output_alias_at(source: &Path, directory: &Path) -> Result<PathBuf, ErrorPayload> {
+    if !source.is_file() {
+        return Err(internal_error("saved output does not exist or is not a file"));
+    }
+    fs::create_dir_all(directory).map_err(|error| internal_error(format!("failed to create alias directory: {error}")))?;
+    if source.parent() == Some(directory) {
+        return Ok(source.to_path_buf());
+    }
+    let destination = unique_alias_path(directory, source)?;
+    std::os::unix::fs::symlink(source, &destination)
+        .map_err(|error| internal_error(format!("failed to create output alias: {error}")))?;
+    Ok(destination)
+}
+
+#[tauri::command]
+fn create_output_alias_command(output_path: String) -> Result<String, ErrorPayload> {
+    let home = std::env::var_os("HOME").ok_or_else(|| internal_error("HOME is unavailable"))?;
+    let directory = PathBuf::from(home).join("Pictures").join("Agent-2D");
+    create_output_alias_at(Path::new(&output_path), &directory)
         .map(|path| path.to_string_lossy().into_owned())
 }
 
@@ -860,6 +944,7 @@ pub fn run() {
             object_mask_preview_command,
             preview_image_command,
             resolve_output_path_command,
+            create_output_alias_command,
             start_job_command,
             job_status_command,
             cancel_job_command,
@@ -893,6 +978,22 @@ mod tests {
     }
 
     #[test]
+    fn output_alias_creates_symlink_and_increments_collision_name() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let alias_dir = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("image.png");
+        fs::write(&source, b"image").unwrap();
+
+        let first = create_output_alias_at(&source, alias_dir.path()).unwrap();
+        assert_eq!(first.file_name().and_then(|value| value.to_str()), Some("image.png"));
+        assert_eq!(fs::read_link(&first).unwrap(), source);
+
+        let second = create_output_alias_at(&source, alias_dir.path()).unwrap();
+        assert_eq!(second.file_name().and_then(|value| value.to_str()), Some("image_02.png"));
+        assert_eq!(fs::read_link(&second).unwrap(), source);
+    }
+
+    #[test]
     fn cancellation_token_drives_cancelled_error() {
         let token = CancellationToken::new();
         token.cancel();
@@ -905,6 +1006,7 @@ mod tests {
             compression_mode: "exact".into(),
             format: "png".into(),
             model_id: None,
+            sr_preset: None,
             target_width: None,
             target_height: None,
             crop_zoom: None,
@@ -915,6 +1017,8 @@ mod tests {
             vector_detail: None,
             vector_max_colors: None,
             vector_threshold: None,
+            object_action: None,
+            object_selection: None,
         };
         assert!(matches!(
             execute_job(&request, &token),
@@ -958,6 +1062,7 @@ mod tests {
             compression_mode: "exact".into(),
             format: "png".into(),
             model_id: None,
+            sr_preset: None,
             target_width: Some(width),
             target_height: Some(height),
             crop_zoom: Some(1.0),
@@ -968,6 +1073,8 @@ mod tests {
             vector_detail: None,
             vector_max_colors: None,
             vector_threshold: None,
+            object_action: None,
+            object_selection: None,
         }
     }
 
@@ -1030,6 +1137,7 @@ mod tests {
             compression_mode: "preserve".into(),
             format: "jpeg".into(),
             model_id: None,
+            sr_preset: None,
             target_width: None,
             target_height: None,
             crop_zoom: None,
@@ -1040,6 +1148,8 @@ mod tests {
             vector_detail: None,
             vector_max_colors: None,
             vector_threshold: None,
+            object_action: None,
+            object_selection: None,
         };
         let result = execute_job(&request, &CancellationToken::new()).unwrap();
         assert_eq!((result.output_width, result.output_height), (160, 90));

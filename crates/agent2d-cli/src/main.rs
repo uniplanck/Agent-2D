@@ -90,6 +90,8 @@ enum Command {
         scale: ScaleArg,
         #[arg(long, value_enum, default_value_t = SrModeArg::Balanced)]
         mode: SrModeArg,
+        #[arg(long, value_enum)]
+        preset: Option<SrPresetArg>,
         #[arg(long)]
         model: Option<String>,
         #[arg(long, value_enum)]
@@ -194,6 +196,8 @@ enum Command {
         scale: ScaleArg,
         #[arg(long, value_enum, default_value_t = SrModeArg::Balanced)]
         sr_mode: SrModeArg,
+        #[arg(long, value_enum)]
+        preset: Option<SrPresetArg>,
         #[arg(long)]
         model: Option<String>,
         #[arg(long, value_enum)]
@@ -338,6 +342,8 @@ enum OutputFormatArg {
     Webp,
     Avif,
     Jxl,
+    Tiff,
+    Bmp,
 }
 
 impl From<OutputFormatArg> for OutputFormat {
@@ -348,6 +354,8 @@ impl From<OutputFormatArg> for OutputFormat {
             OutputFormatArg::Webp => OutputFormat::Webp,
             OutputFormatArg::Avif => OutputFormat::Avif,
             OutputFormatArg::Jxl => OutputFormat::Jxl,
+            OutputFormatArg::Tiff => OutputFormat::Tiff,
+            OutputFormatArg::Bmp => OutputFormat::Bmp,
         }
     }
 }
@@ -399,6 +407,7 @@ enum SrPresetArg {
     Illustration,
     #[value(name = "ai-art")]
     AiArt,
+    Graphics,
 }
 
 impl From<SrPresetArg> for SuperResolutionPreset {
@@ -408,6 +417,7 @@ impl From<SrPresetArg> for SuperResolutionPreset {
             SrPresetArg::Photo => SuperResolutionPreset::Photo,
             SrPresetArg::Illustration => SuperResolutionPreset::Illustration,
             SrPresetArg::AiArt => SuperResolutionPreset::AiArt,
+            SrPresetArg::Graphics => SuperResolutionPreset::Graphics,
         }
     }
 }
@@ -539,6 +549,7 @@ fn main() -> ExitCode {
             output,
             scale,
             mode,
+            preset,
             model,
             format,
             formats,
@@ -557,6 +568,7 @@ fn main() -> ExitCode {
                         target_width: None,
                         target_height: None,
                         mode: mode.into(),
+                        preset: preset.map(Into::into),
                         model_id: model.clone(),
                     }),
                     compression: CompressionOptions {
@@ -689,6 +701,7 @@ fn main() -> ExitCode {
             output,
             scale,
             sr_mode,
+            preset,
             model,
             compression_mode,
             format,
@@ -710,6 +723,7 @@ fn main() -> ExitCode {
                         target_width,
                         target_height,
                         mode: sr_mode.into(),
+                        preset: preset.map(Into::into),
                         model_id: model.clone(),
                     }),
                     compression: CompressionOptions {
@@ -913,6 +927,8 @@ fn conversion_format_for_output(path: &PathBuf) -> (Option<OutputFormat>, Compre
         Some("png") => (Some(OutputFormat::Png), CompressionMode::Exact),
         Some("webp") => (Some(OutputFormat::Webp), CompressionMode::Exact),
         Some("jxl") => (Some(OutputFormat::Jxl), CompressionMode::Exact),
+        Some("tif") | Some("tiff") => (Some(OutputFormat::Tiff), CompressionMode::Exact),
+        Some("bmp") => (Some(OutputFormat::Bmp), CompressionMode::Exact),
         Some("jpg") | Some("jpeg") => (Some(OutputFormat::Jpeg), CompressionMode::Preserve),
         Some("avif") => (Some(OutputFormat::Avif), CompressionMode::Preserve),
         _ => (None, CompressionMode::Exact),
@@ -931,7 +947,7 @@ fn resolve_output_formats(
 
 fn default_compression_mode(format: OutputFormat) -> CompressionMode {
     match format {
-        OutputFormat::Png | OutputFormat::Webp | OutputFormat::Jxl => CompressionMode::Exact,
+        OutputFormat::Png | OutputFormat::Webp | OutputFormat::Jxl | OutputFormat::Tiff | OutputFormat::Bmp => CompressionMode::Exact,
         OutputFormat::Jpeg | OutputFormat::Avif => CompressionMode::Preserve,
     }
 }
@@ -980,6 +996,8 @@ fn output_format_tag(format: OutputFormat) -> (&'static str, &'static str) {
         OutputFormat::Webp => ("webp", "webp"),
         OutputFormat::Avif => ("avif", "avif"),
         OutputFormat::Jxl => ("jxl", "jxl"),
+        OutputFormat::Tiff => ("tiff", "tiff"),
+        OutputFormat::Bmp => ("bmp", "bmp"),
     }
 }
 

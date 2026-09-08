@@ -26,21 +26,28 @@ import type {
 import "./styles.css";
 
 const POLL_MS = 180;
-const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "avif", "jxl"]);
+const SUPPORTED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp", "avif", "jxl", "tif", "tiff", "bmp"]);
 
 type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
 type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
 type ObjectTool = "include" | "exclude" | "box" | "pan";
+type NavOperation = "enhance" | "compress" | "optimize" | "crop" | "cutout" | "vectorize";
+type CutoutMode = "auto" | "object";
+type SrContentPreset = "general" | "photo" | "illustration" | "ai-art" | "graphics";
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
 type AppLanguage = "system" | "ja" | "en";
 type ResolvedLanguage = Exclude<AppLanguage, "system">;
-type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "operation7" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
+type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
 type ShortcutMap = Record<ShortcutAction, string>;
+type OutputNamingTemplates = Record<Operation, string>;
 type UiPreferences = {
   theme: AppTheme;
   language: AppLanguage;
   shortcuts: ShortcutMap;
+  formatVisibility: Record<OutputFormat, boolean>;
+  outputNaming: OutputNamingTemplates;
+  outputAliasEnabled: boolean;
 };
 type ObjectSelectionSnapshot = {
   points: ObjectPoint[];
@@ -68,8 +75,8 @@ interface FormatComparisonOutput {
 
 const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
 const UI_PREFERENCES_STORAGE_KEY = "agent2d.ui-preferences.v1";
-const OPERATION_ORDER: Operation[] = ["enhance", "compress", "optimize", "crop", "remove-bg", "object-edit", "vectorize"];
-const OPERATION_SHORTCUT_ACTIONS: ShortcutAction[] = ["operation1", "operation2", "operation3", "operation4", "operation5", "operation6", "operation7"];
+const NAV_OPERATION_ORDER: NavOperation[] = ["enhance", "compress", "optimize", "crop", "cutout", "vectorize"];
+const OPERATION_SHORTCUT_ACTIONS: ShortcutAction[] = ["operation1", "operation2", "operation3", "operation4", "operation5", "operation6"];
 const DEFAULT_SHORTCUTS: ShortcutMap = {
   operation1: "Meta+Digit1",
   operation2: "Meta+Digit2",
@@ -77,7 +84,6 @@ const DEFAULT_SHORTCUTS: ShortcutMap = {
   operation4: "Meta+Digit4",
   operation5: "Meta+Digit5",
   operation6: "Meta+Digit6",
-  operation7: "Meta+Digit7",
   previousOperation: "Meta+BracketLeft",
   nextOperation: "Meta+BracketRight",
   openImage: "Meta+KeyO",
@@ -103,11 +109,17 @@ const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string; detailJa: string
 const UI_COPY = {
   ja: {
     settingsTitle: "設定",
-    settingsSubtitle: "外観・言語・ショートカット",
+    settingsSubtitle: "外観・言語・出力・命名・ショートカット",
     language: "言語",
     languageDetail: "Systemを選ぶとmacOSの表示言語に合わせます。",
     theme: "Theme",
     themeDetail: "作業内容は変えず、色・素材感・コントラストだけを切り替えます。",
+    outputFormats: "出力形式",
+    outputFormatsDetail: "通常画面に表示する形式を選べます。主要5形式は初期表示、TIFF / BMPは必要なときだけ有効にできます。",
+    outputNaming: "Output Naming",
+    outputNamingDetail: "モードごとの自動ファイル名を編集できます。拡張子と複数形式の -png / -jpg 等は自動付与します。",
+    outputAlias: "生成画像エイリアス",
+    outputAliasDetail: "ONにすると、保存完了後に元画像を複製せず /Users/naomac/Pictures/Agent-2D へ軽量リンクを自動作成します。",
     shortcuts: "Keyboard Shortcuts",
     shortcutsDetail: "キー欄を押して新しい組み合わせを入力。Delete / Backspaceで解除できます。",
     reset: "初期値へ戻す",
@@ -135,11 +147,17 @@ const UI_COPY = {
   },
   en: {
     settingsTitle: "Settings",
-    settingsSubtitle: "Appearance, language & shortcuts",
+    settingsSubtitle: "Appearance, language, output, naming & shortcuts",
     language: "Language",
     languageDetail: "System follows the display language configured in macOS.",
     theme: "Theme",
     themeDetail: "Change color, material feel and contrast without changing the workflow.",
+    outputFormats: "Output Formats",
+    outputFormatsDetail: "Choose which formats appear in the workspace. The five primary formats are visible by default; TIFF / BMP are optional.",
+    outputNaming: "Output Naming",
+    outputNamingDetail: "Edit the automatic filename template for each mode. Extensions and multi-format tags such as -png / -jpg are added automatically.",
+    outputAlias: "Generated image aliases",
+    outputAliasDetail: "When enabled, Agent-2D creates a lightweight link in /Users/naomac/Pictures/Agent-2D after each successful save without duplicating the image.",
     shortcuts: "Keyboard Shortcuts",
     shortcutsDetail: "Click a key field and press a new combination. Delete / Backspace clears it.",
     reset: "Reset defaults",
@@ -172,6 +190,8 @@ const OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }>
   { id: "webp", label: "WebP", detail: "Lossless / Compact" },
   { id: "avif", label: "AVIF", detail: "Preserve / Compact" },
   { id: "jxl", label: "JXL", detail: "Lossless / Compact" },
+  { id: "tiff", label: "TIFF", detail: "Lossless / Editing" },
+  { id: "bmp", label: "BMP", detail: "Lossless / Legacy" },
 ];
 const BACKGROUND_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Transparent" },
@@ -181,6 +201,44 @@ const OBJECT_ALPHA_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; deta
   { id: "png", label: "PNG", detail: "Transparent" },
   { id: "webp", label: "WebP", detail: "Transparent · Lossless" },
 ];
+const DEFAULT_FORMAT_VISIBILITY: Record<OutputFormat, boolean> = {
+  png: true,
+  jpeg: true,
+  webp: true,
+  avif: true,
+  jxl: true,
+  tiff: false,
+  bmp: false,
+};
+const DEFAULT_OUTPUT_NAMING: OutputNamingTemplates = {
+  enhance: "{name}-agent2d-enhanced",
+  compress: "{name}-agent2d-compressed",
+  optimize: "{name}-agent2d-optimized",
+  crop: "{name}-agent2d-custom",
+  resize: "{name}-agent2d-resized",
+  vectorize: "{name}-agent2d-vectorized",
+  "remove-bg": "{name}-agent2d-transparent",
+  "object-edit": "{name}-agent2d-object-edit",
+};
+const OUTPUT_NAMING_ROWS: Array<{ id: Operation; label: string; detailJa: string; detailEn: string }> = [
+  { id: "enhance", label: "Enhance", detailJa: "AI / Crisp超解像", detailEn: "AI / Crisp upscale" },
+  { id: "compress", label: "Compress", detailJa: "圧縮・変換", detailEn: "Compress / convert" },
+  { id: "optimize", label: "Optimize", detailJa: "超解像 + 圧縮", detailEn: "Upscale + compress" },
+  { id: "crop", label: "Custom · Crop", detailJa: "構図つきCustom出力", detailEn: "Custom framed output" },
+  { id: "resize", label: "Custom · Resize", detailJa: "指定サイズ縮小", detailEn: "Resize to target" },
+  { id: "remove-bg", label: "Cutout · Auto", detailJa: "FeyNoBg背景透過", detailEn: "FeyNoBg transparency" },
+  { id: "object-edit", label: "Cutout · Object", detailJa: "SAM / LaMa編集", detailEn: "SAM / LaMa edit" },
+  { id: "vectorize", label: "Vectorize", detailJa: "SVG化", detailEn: "SVG export" },
+];
+const SOURCE_SCALE_PRESETS = [
+  { value: 0.125, label: "⅛×" },
+  { value: 0.25, label: "¼×" },
+  { value: 0.5, label: "½×" },
+  { value: 1, label: "1×" },
+  { value: 2, label: "2×" },
+  { value: 4, label: "4×" },
+] as const;
+
 const OBJECT_FILL_OUTPUT_FORMATS: Array<{ id: OutputFormat; label: string; detail: string }> = [
   { id: "png", label: "PNG", detail: "Filled · Lossless" },
   { id: "jpeg", label: "JPG", detail: "Filled · High Quality" },
@@ -224,7 +282,7 @@ function resolveLanguage(language: AppLanguage): ResolvedLanguage {
 function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; label: string; detail: string }> {
   const ja = language === "ja";
   return [
-    ...OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${modeLabel(operation)}`, detail: ja ? "モードへ直接移動" : "Jump directly to this mode" })),
+    ...NAV_OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${navModeLabel(operation)}`, detail: ja ? "モードへ直接移動" : "Jump directly to this mode" })),
     { id: "previousOperation", label: ja ? "前のモード" : "Previous mode", detail: ja ? "左隣のタブへ移動" : "Move to the tab on the left" },
     { id: "nextOperation", label: ja ? "次のモード" : "Next mode", detail: ja ? "右隣のタブへ移動" : "Move to the tab on the right" },
     { id: "openImage", label: ja ? "画像を開く" : "Open image", detail: ja ? "ファイル選択を開く" : "Open the image picker" },
@@ -234,27 +292,51 @@ function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; l
   ];
 }
 
-function operationSubtitle(operation: Operation, language: ResolvedLanguage): string {
+function navModeLabel(operation: NavOperation): string {
+  if (operation === "enhance") return "Enhance";
+  if (operation === "compress") return "Compress";
+  if (operation === "optimize") return "Optimize";
+  if (operation === "crop") return "Custom";
+  if (operation === "cutout") return "Cutout";
+  return "Vectorize";
+}
+
+function operationSubtitle(operation: NavOperation, language: ResolvedLanguage): string {
   if (language === "en") {
-    if (operation === "enhance") return "AI upscaling";
+    if (operation === "enhance") return "AI / crisp upscaling";
     if (operation === "compress") return "Compress & convert";
     if (operation === "optimize") return "Upscale + compress";
     if (operation === "crop") return "Size, crop & target";
-    if (operation === "remove-bg") return "AI background removal";
-    if (operation === "object-edit") return "Select & remove objects";
+    if (operation === "cutout") return "Auto BG / object edit";
     return "SVG · illustration / line art";
   }
-  return operation === "enhance" ? "AI超解像"
+  return operation === "enhance" ? "AI / くっきり超解像"
     : operation === "compress" ? "超圧縮・変換"
       : operation === "optimize" ? "超解像 + 圧縮"
         : operation === "crop" ? "サイズ・構図・容量"
-          : operation === "remove-bg" ? "AI背景透過"
-            : operation === "object-edit" ? "クリック選択・削除"
-              : "SVG化 · イラスト/線画";
+          : operation === "cutout" ? "自動透過 / クリック編集"
+            : "SVG化 · イラスト/線画";
+}
+
+function navOperationFor(operation: Operation): NavOperation {
+  if (operation === "remove-bg" || operation === "object-edit") return "cutout";
+  if (operation === "resize") return "crop";
+  return operation;
+}
+
+function operationForNav(operation: NavOperation, cutoutMode: CutoutMode): Operation {
+  return operation === "cutout" ? (cutoutMode === "auto" ? "remove-bg" : "object-edit") : operation;
 }
 
 function loadUiPreferences(): UiPreferences {
-  const fallback: UiPreferences = { theme: "lumiere", language: "system", shortcuts: { ...DEFAULT_SHORTCUTS } };
+  const fallback: UiPreferences = {
+    theme: "lumiere",
+    language: "system",
+    shortcuts: { ...DEFAULT_SHORTCUTS },
+    formatVisibility: { ...DEFAULT_FORMAT_VISIBILITY },
+    outputNaming: { ...DEFAULT_OUTPUT_NAMING },
+    outputAliasEnabled: false,
+  };
   try {
     const raw = window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY);
     if (!raw) return fallback;
@@ -262,10 +344,23 @@ function loadUiPreferences(): UiPreferences {
     const shortcuts = parsed.shortcuts && typeof parsed.shortcuts === "object"
       ? Object.fromEntries((Object.keys(DEFAULT_SHORTCUTS) as ShortcutAction[]).map((key) => [key, typeof parsed.shortcuts?.[key] === "string" ? parsed.shortcuts[key] : DEFAULT_SHORTCUTS[key]])) as ShortcutMap
       : { ...DEFAULT_SHORTCUTS };
+    const formatVisibility = Object.fromEntries(
+      OUTPUT_FORMATS.map(({ id }) => [id, typeof parsed.formatVisibility?.[id] === "boolean" ? parsed.formatVisibility[id] : DEFAULT_FORMAT_VISIBILITY[id]]),
+    ) as Record<OutputFormat, boolean>;
+    if (!Object.values(formatVisibility).some(Boolean)) formatVisibility.png = true;
+    const outputNaming = Object.fromEntries(
+      (Object.keys(DEFAULT_OUTPUT_NAMING) as Operation[]).map((operation) => {
+        const saved = parsed.outputNaming?.[operation];
+        return [operation, typeof saved === "string" && saved.trim() ? saved.slice(0, 180) : DEFAULT_OUTPUT_NAMING[operation]];
+      }),
+    ) as OutputNamingTemplates;
     return {
       theme: isAppTheme(parsed.theme) ? parsed.theme : fallback.theme,
       language: isAppLanguage(parsed.language) ? parsed.language : fallback.language,
       shortcuts,
+      formatVisibility,
+      outputNaming,
+      outputAliasEnabled: parsed.outputAliasEnabled === true,
     };
   } catch {
     return fallback;
@@ -358,7 +453,9 @@ function formatQualityText(format: OutputFormat): string {
   if (format === "jpeg") return "JPEG High Quality";
   if (format === "webp") return "WebP Lossless";
   if (format === "avif") return "AVIF Preserve";
-  return "JXL Lossless";
+  if (format === "jxl") return "JXL Lossless";
+  if (format === "tiff") return "TIFF Lossless";
+  return "BMP Lossless";
 }
 
 type LocalizedHelp = { title: string; bodyJa: string; bodyEn: string; useJa: string; useEn: string };
@@ -695,41 +792,50 @@ function bytes(value?: number | null): string {
   return `${(value / 1024 ** 3).toFixed(2)} GB`;
 }
 
-function outputFor(input: string, operation: Operation, format: OutputFormat, batch = false): string {
+function operationOutputSuffix(operation: Operation): string {
+  if (operation === "enhance") return "enhanced";
+  if (operation === "compress") return "compressed";
+  if (operation === "crop") return "custom";
+  if (operation === "resize") return "resized";
+  if (operation === "vectorize") return "vectorized";
+  if (operation === "remove-bg") return "transparent";
+  if (operation === "object-edit") return "object-edit";
+  return "optimized";
+}
+
+function outputNameFor(
+  input: string,
+  operation: Operation,
+  format: OutputFormat,
+  template: string,
+  context: { scale: 1 | 2 | 4; targetWidth: number; targetHeight: number },
+  batch = false,
+): string {
   if (!input) return "";
-  const slash = input.lastIndexOf("/");
-  const dir = slash >= 0 ? input.slice(0, slash + 1) : "";
-  const file = slash >= 0 ? input.slice(slash + 1) : input;
+  const file = basename(input);
   const dot = file.lastIndexOf(".");
-  const stem = dot > 0 ? file.slice(0, dot) : file;
+  const sourceStem = dot > 0 ? file.slice(0, dot) : file;
   const sourceExt = dot > 0 ? file.slice(dot + 1).toLowerCase() : "image";
-  const sourceTag = batch ? `-${sourceExt}` : "";
-  const suffix = operation === "enhance"
-    ? "enhanced"
-    : operation === "compress"
-      ? "compressed"
-      : operation === "crop"
-        ? "custom"
-        : operation === "resize"
-          ? "resized"
-          : operation === "vectorize"
-            ? "vectorized"
-            : operation === "remove-bg"
-              ? "transparent"
-              : operation === "object-edit"
-                ? "object-edit"
-                : "optimized";
+  const name = batch ? `${sourceStem}-${sourceExt}` : sourceStem;
+  const fallback = DEFAULT_OUTPUT_NAMING[operation];
+  const rendered = (template.trim() || fallback)
+    .replaceAll("{name}", name)
+    .replaceAll("{operation}", operationOutputSuffix(operation))
+    .replaceAll("{scale}", `${context.scale}x`)
+    .replaceAll("{width}", String(context.targetWidth))
+    .replaceAll("{height}", String(context.targetHeight))
+    .replaceAll("/", "-")
+    .replaceAll("\0", "")
+    .trim()
+    .replace(/\.+$/, "");
+  const stem = rendered || `${name}-agent2d-${operationOutputSuffix(operation)}`;
   const ext = operation === "vectorize" ? "svg" : format === "jpeg" ? "jpg" : format;
-  return `${dir}${stem}${sourceTag}-agent2d-${suffix}.${ext}`;
+  return `${stem}.${ext}`;
 }
 
 function directoryOf(path: string): string {
   const slash = path.lastIndexOf("/");
   return slash > 0 ? path.slice(0, slash) : "";
-}
-
-function outputNameFor(input: string, operation: Operation, format: OutputFormat, batch = false): string {
-  return basename(outputFor(input, operation, format, batch));
 }
 
 function withExtension(filename: string, format: OutputFormat): string {
@@ -825,6 +931,11 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function sourceScaleLabel(value: number): string {
+  const preset = SOURCE_SCALE_PRESETS.find((item) => Math.abs(item.value - value) < 0.0005);
+  return preset?.label ?? `${Number(value.toFixed(3))}×`;
+}
+
 function compressionModeFor(format: OutputFormat): CompressionMode {
   return format === "avif" || format === "jpeg" ? "preserve" : "exact";
 }
@@ -850,6 +961,7 @@ export default function App() {
   const tr = useCallback((ja: string, en: string) => (uiLanguage === "ja" ? ja : en), [uiLanguage]);
   const currentShortcutRows = useMemo(() => shortcutRows(uiLanguage), [uiLanguage]);
   const [operation, setOperation] = useState<Operation>("optimize");
+  const [cutoutMode, setCutoutMode] = useState<CutoutMode>("auto");
   const [inputPath, setInputPath] = useState("");
   const [outputDirectory, setOutputDirectory] = useState("");
   const [outputName, setOutputName] = useState("");
@@ -863,6 +975,7 @@ export default function App() {
   const [comparisonFormat, setComparisonFormat] = useState<OutputFormat>("png");
   const [scale, setScale] = useState<1 | 2 | 4>(2);
   const [srMode, setSrMode] = useState<SrMode>("balanced");
+  const [srPreset, setSrPreset] = useState<SrContentPreset>("general");
   const [selectedFormats, setSelectedFormats] = useState<OutputFormat[]>(["png"]);
   const [modelId, setModelId] = useState("");
   const [capabilities, setCapabilities] = useState<SrCapabilities | null>(null);
@@ -964,7 +1077,15 @@ export default function App() {
 
   const backendRunning = job?.state === "queued" || job?.state === "running";
   const running = batchRunning || backendRunning;
-  const effectiveFormat: OutputFormat = selectedFormats[0] ?? "png";
+  const activeNavOperation = navOperationFor(operation);
+  const formatOptions = operation === "remove-bg"
+    ? BACKGROUND_OUTPUT_FORMATS
+    : operation === "object-edit"
+      ? (objectAction === "remove-and-fill" ? OBJECT_FILL_OUTPUT_FORMATS : OBJECT_ALPHA_OUTPUT_FORMATS)
+      : OUTPUT_FORMATS;
+  const visibleFormatOptions = formatOptions.filter((item) => uiPreferences.formatVisibility[item.id]);
+  const displayedFormatOptions = visibleFormatOptions.length > 0 ? visibleFormatOptions : formatOptions.slice(0, 1);
+  const effectiveFormat: OutputFormat = selectedFormats[0] ?? displayedFormatOptions[0]?.id ?? "png";
   const activeComparison = comparisonOutputs.find((entry) => entry.format === comparisonFormat) ?? comparisonOutputs[0] ?? null;
   const displayResult = operation === "crop" ? result : activeComparison?.result ?? result;
   const displayOutputPreview = activeComparison?.preview ?? outputPreview;
@@ -973,6 +1094,26 @@ export default function App() {
     : null;
   const selectedModeHelp = MODE_HELP[srMode];
   const selectedModelHelp = modelHelp(modelId);
+  const batchCapable = operation !== "crop" && operation !== "object-edit";
+  const makeOutputName = useCallback((path: string, targetOperation: Operation, targetFormat: OutputFormat, batch = false) => (
+    outputNameFor(
+      path,
+      targetOperation,
+      targetFormat,
+      uiPreferences.outputNaming[targetOperation],
+      { scale, targetWidth, targetHeight },
+      batch,
+    )
+  ), [scale, targetHeight, targetWidth, uiPreferences.outputNaming]);
+
+  useEffect(() => {
+    const allowed = new Set(displayedFormatOptions.map((item) => item.id));
+    setSelectedFormats((current) => {
+      const next = current.filter((format) => allowed.has(format));
+      if (next.length > 0) return next;
+      return displayedFormatOptions[0] ? [displayedFormatOptions[0].id] : ["png"];
+    });
+  }, [objectAction, operation, uiPreferences.formatVisibility]);
 
   const loadInput = useCallback(async (path: string) => {
     if (!path) return false;
@@ -991,7 +1132,7 @@ export default function App() {
       setInputInfo(info);
       setInputPreview(preview);
       if (!outputDirectoryPinnedRef.current) setOutputDirectory(directoryOf(path));
-      setOutputName(outputNameFor(path, operation, effectiveFormat));
+      setOutputName(makeOutputName(path, operation, effectiveFormat));
       setOutputPath("");
       setComparePosition(50);
       setSourceSizeMultiplier(1);
@@ -1014,7 +1155,7 @@ export default function App() {
       setError(errorText(cause));
       return false;
     }
-  }, [effectiveFormat, operation]);
+  }, [effectiveFormat, makeOutputName, operation]);
 
   const refreshCapabilities = useCallback(async () => {
     try {
@@ -1226,20 +1367,29 @@ export default function App() {
   const handlePaths = useCallback(async (paths: string[]) => {
     const valid = paths.filter(isSupportedImage);
     if (valid.length === 0) {
-      setError(tr("対応画像は PNG / JPEG / WebP / AVIF / JXL です。", "Supported images are PNG / JPEG / WebP / AVIF / JXL."));
+      setError(tr("対応画像は PNG / JPEG / WebP / AVIF / JXL / TIFF / BMP です。", "Supported images are PNG / JPEG / WebP / AVIF / JXL / TIFF / BMP."));
       return;
     }
-    if (multiMode) {
+    if (batchCapable && (valid.length > 1 || multiMode)) {
+      setMultiMode(true);
       setQueue((current) => {
-        const known = new Set(current.map((entry) => entry.path));
+        const seed = current.length > 0
+          ? current
+          : inputPath
+            ? [{ path: inputPath, state: "pending" as const }]
+            : [];
+        const known = new Set(seed.map((entry) => entry.path));
         const additions = valid
           .filter((path) => !known.has(path))
           .map((path) => ({ path, state: "pending" as const }));
-        return [...current, ...additions];
+        return [...seed, ...additions];
       });
+    } else {
+      setMultiMode(false);
+      setQueue([]);
     }
     await loadInput(valid[0]);
-  }, [loadInput, multiMode, tr]);
+  }, [batchCapable, inputPath, loadInput, multiMode, tr]);
 
   useEffect(() => {
     const promise = getCurrentWebview().onDragDropEvent((event) => {
@@ -1259,7 +1409,7 @@ export default function App() {
 
   useEffect(() => {
     if (inputPath && !running) {
-      setOutputName(outputNameFor(inputPath, operation, effectiveFormat));
+      setOutputName(makeOutputName(inputPath, operation, effectiveFormat));
       setOutputPath("");
       setResult(null);
       setOutputResults([]);
@@ -1268,7 +1418,7 @@ export default function App() {
       setOutputPreview("");
       setComparePosition(50);
     }
-  }, [effectiveFormat, inputPath, operation, running]);
+  }, [effectiveFormat, inputPath, makeOutputName, operation, running]);
 
   useEffect(() => {
     if ((operation === "crop" || operation === "object-edit") && multiMode && !running) {
@@ -1313,9 +1463,9 @@ export default function App() {
 
   const openImage = async () => {
     const selected = await open({
-      multiple: multiMode,
+      multiple: batchCapable,
       directory: false,
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "avif", "jxl"] }],
+      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "avif", "jxl", "tif", "tiff", "bmp"] }],
     });
     const paths = Array.isArray(selected) ? selected : typeof selected === "string" ? [selected] : [];
     if (paths.length > 0) await handlePaths(paths);
@@ -1362,7 +1512,8 @@ export default function App() {
       srMode,
       compressionMode: useCompact ? "compact" : compressionModeFor(targetFormat),
       format: targetFormat,
-      modelId: modelId || null,
+      modelId: srPreset === "graphics" ? null : modelId || null,
+      srPreset: operation === "enhance" || operation === "optimize" ? srPreset : null,
       targetWidth: operation === "crop" || operation === "resize" ? targetWidth : null,
       targetHeight: operation === "crop" || operation === "resize" ? targetHeight : null,
       cropZoom: operation === "crop" ? cropZoom : null,
@@ -1393,6 +1544,13 @@ export default function App() {
         if (next.result) {
           setResult(next.result);
           setOutputResults((current) => [...current, next.result!]);
+          if (uiPreferences.outputAliasEnabled) {
+            try {
+              await invoke<string>("create_output_alias_command", { outputPath: next.result.outputPath });
+            } catch (cause) {
+              setError(`${tr("画像は保存済みですが、エイリアス作成に失敗しました。", "The image was saved, but creating its alias failed.")} ${errorText(cause)}`);
+            }
+          }
         }
         if (next.result?.outputPath) {
           let preview = "";
@@ -1422,7 +1580,7 @@ export default function App() {
         error: { code: "desktop_request_error", message: errorText(cause) },
       };
     }
-  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, modelId, objectAction, operation, scale, srMode, targetHeight, targetWidth, vectorDetail, vectorMaxColors, vectorPreset]);
+  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, modelId, objectAction, operation, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
     if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
@@ -1506,9 +1664,10 @@ export default function App() {
           break;
         }
         try {
+          const batchName = makeOutputName(path, operation, targetFormat, true);
           const destination = operation === "vectorize"
-            ? await resolveVectorDestination(outputNameFor(path, operation, targetFormat, true))
-            : await resolveDestination(outputNameForFormat(outputNameFor(path, operation, targetFormat, true), targetFormat, runFormats.length > 1), targetFormat);
+            ? await resolveVectorDestination(batchName)
+            : await resolveDestination(outputNameForFormat(batchName, targetFormat, runFormats.length > 1), targetFormat);
           setOutputPath(destination);
           const terminal = await runOne(path, destination, targetFormat);
           if (terminal?.state === "cancelled") {
@@ -1547,23 +1706,22 @@ export default function App() {
     }
   };
 
-  const toggleMultiMode = () => {
+  const clearQueue = () => {
     if (running) return;
-    const next = !multiMode;
-    setMultiMode(next);
-    if (next) {
-      setQueue((current) => {
-        if (!inputPath || current.some((entry) => entry.path === inputPath)) return current;
-        return [{ path: inputPath, state: "pending" }, ...current];
-      });
-    } else {
-      setQueue([]);
-    }
+    setQueue([]);
+    setMultiMode(false);
   };
 
   const removeQueueEntry = (path: string) => {
     if (running) return;
-    setQueue((current) => current.filter((entry) => entry.path !== path));
+    const remaining = queue.filter((entry) => entry.path !== path);
+    if (remaining.length <= 1) {
+      setQueue([]);
+      setMultiMode(false);
+      if (remaining[0] && remaining[0].path !== inputPath) void loadInput(remaining[0].path);
+      return;
+    }
+    setQueue(remaining);
   };
 
   const savings = useMemo(() => {
@@ -1577,9 +1735,11 @@ export default function App() {
       ? tr("FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。", "FeyNoBg estimates a foreground alpha matte and exports transparency while preserving the original pixel dimensions. PNG and WebP are supported.")
     : operation === "object-edit"
       ? tr("SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。", "Select any object with SAM 2.1 Base+, then adjust the mask with expand/contract and feathering. Transparency uses the SAM mask; natural removal uses LaMa to reconstruct the background.")
-    : operation === "crop" && customTargetBytes != null
-      ? tr(`最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`, `Automatically adjusts quality to prioritize the ${bytes(customTargetBytes)} maximum. If exact PNG output cannot meet the limit, Agent-2D fails explicitly instead of silently degrading it.`)
-      : selectedFormats.map(formatQualityText).join(" · ");
+    : (operation === "enhance" || operation === "optimize") && srPreset === "graphics" && scale > 1
+      ? tr("Crisp Graphicsは写真向けAI補完を使わず、輪郭保持リサイズと軽いシャープ処理でロゴ/アイコンを拡大します。元にない模様を作らないことを優先します。", "Crisp Graphics bypasses photo-oriented AI and enlarges logos/icons with edge-preserving resize plus light sharpening, prioritizing source geometry over invented detail.")
+      : operation === "crop" && customTargetBytes != null
+        ? tr(`最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`, `Automatically adjusts quality to prioritize the ${bytes(customTargetBytes)} maximum. If exact PNG output cannot meet the limit, Agent-2D fails explicitly instead of silently degrading it.`)
+        : selectedFormats.map(formatQualityText).join(" · ");
 
   const elapsedMs = jobTiming ? Math.max(0, clock - jobTiming.startedAt) : 0;
   const adaptiveTotalMs = jobTiming
@@ -1790,7 +1950,7 @@ export default function App() {
   const applySourceSizeMultiplier = useCallback((requestedMultiplier: number) => {
     if (!inputInfo) return;
     const multiplier = clamp(Number.isFinite(requestedMultiplier) ? requestedMultiplier : 1, 0.1, maxSourceSizeMultiplier);
-    setSourceSizeMultiplier(Number(multiplier.toFixed(2)));
+    setSourceSizeMultiplier(Number(multiplier.toFixed(3)));
     setTargetWidth(clamp(Math.round(inputInfo.width * multiplier), 1, 32768));
     setTargetHeight(clamp(Math.round(inputInfo.height * multiplier), 1, 32768));
     setCropZoom(1);
@@ -1894,15 +2054,17 @@ export default function App() {
       const directIndex = OPERATION_SHORTCUT_ACTIONS.findIndex((action) => matchesShortcut(event, shortcuts[action]));
       if (directIndex >= 0) {
         event.preventDefault();
-        if (!running) setOperation(OPERATION_ORDER[directIndex]);
+        if (!running) setOperation(operationForNav(NAV_OPERATION_ORDER[directIndex], cutoutMode));
         return;
       }
       if (matchesShortcut(event, shortcuts.previousOperation) || matchesShortcut(event, shortcuts.nextOperation)) {
         event.preventDefault();
         if (running) return;
-        const current = Math.max(0, OPERATION_ORDER.indexOf(operation));
+        const currentNav = navOperationFor(operation);
+        const current = Math.max(0, NAV_OPERATION_ORDER.indexOf(currentNav));
         const delta = matchesShortcut(event, shortcuts.previousOperation) ? -1 : 1;
-        setOperation(OPERATION_ORDER[(current + delta + OPERATION_ORDER.length) % OPERATION_ORDER.length]);
+        const nextNav = NAV_OPERATION_ORDER[(current + delta + NAV_OPERATION_ORDER.length) % NAV_OPERATION_ORDER.length];
+        setOperation(operationForNav(nextNav, cutoutMode));
         return;
       }
       if (matchesShortcut(event, shortcuts.openImage)) {
@@ -1922,7 +2084,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [openImage, operation, running, start, uiPreferences.shortcuts, undoObjectSelection]);
+  }, [cutoutMode, openImage, operation, running, start, uiPreferences.shortcuts, undoObjectSelection]);
 
   return (
     <main className={`app-shell mode-${operation} ${dragActive ? "dragging" : ""}`}>
@@ -1930,8 +2092,8 @@ export default function App() {
         <div className="drag-overlay" aria-hidden="true">
           <div className="drag-overlay-card">
             <span>↘</span>
-            <strong>{multiMode ? tr("画像を追加", "Add images") : tr("画像を置き換え", "Replace image")}</strong>
-            <small>{multiMode ? tr("複数枚をまとめてドロップできます", "Drop multiple images at once") : tr("ウィンドウ内のどこでもドロップできます", "Drop anywhere in the window")}</small>
+            <strong>{tr("画像を読み込む", "Load images")}</strong>
+            <small>{batchCapable ? tr("1枚なら単体、複数枚なら自動Batch。Batch中の追加ドロップもそのまま追加します。", "One image opens singly; multiple images automatically become a batch. Drops during a batch are appended.") : tr("このモードでは1枚の画像を読み込みます。", "This mode loads one image at a time.")}</small>
           </div>
         </div>
       )}
@@ -1988,6 +2150,72 @@ export default function App() {
                 </div>
               </section>
               <section className="settings-section">
+                <div className="settings-section-head">
+                  <div><strong>{copy.outputFormats}</strong><small>{copy.outputFormatsDetail}</small></div>
+                </div>
+                <div className="format-visibility-grid" role="group" aria-label={copy.outputFormats}>
+                  {OUTPUT_FORMATS.map((format, index) => {
+                    const active = uiPreferences.formatVisibility[format.id];
+                    const visibleCount = Object.values(uiPreferences.formatVisibility).filter(Boolean).length;
+                    return (
+                      <button
+                        key={format.id}
+                        type="button"
+                        className={active ? "active" : ""}
+                        aria-pressed={active}
+                        onClick={() => setUiPreferences((current) => {
+                          if (current.formatVisibility[format.id] && Object.values(current.formatVisibility).filter(Boolean).length <= 1) return current;
+                          return { ...current, formatVisibility: { ...current.formatVisibility, [format.id]: !current.formatVisibility[format.id] } };
+                        })}
+                      >
+                        <span><strong>{format.label}</strong><small>{format.detail}</small></span>
+                        <span className="format-visibility-state">{active ? tr("表示", "Shown") : tr("非表示", "Hidden")}</span>
+                        {index >= 5 && <em>{tr("追加", "Optional")}</em>}
+                        {active && visibleCount === 1 && <i aria-hidden="true">•</i>}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head shortcut-head">
+                  <div><strong>{copy.outputNaming}</strong><small>{copy.outputNamingDetail}</small></div>
+                  <button type="button" onClick={() => setUiPreferences((current) => ({ ...current, outputNaming: { ...DEFAULT_OUTPUT_NAMING } }))}>{copy.reset}</button>
+                </div>
+                <div className="naming-template-grid">
+                  {OUTPUT_NAMING_ROWS.map((row) => (
+                    <label className="naming-template-row" key={row.id}>
+                      <span><strong>{row.label}</strong><small>{uiLanguage === "ja" ? row.detailJa : row.detailEn}</small></span>
+                      <input
+                        value={uiPreferences.outputNaming[row.id]}
+                        onChange={(event) => setUiPreferences((current) => ({
+                          ...current,
+                          outputNaming: { ...current.outputNaming, [row.id]: event.target.value.slice(0, 180) },
+                        }))}
+                        placeholder={DEFAULT_OUTPUT_NAMING[row.id]}
+                        spellCheck={false}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <p className="naming-template-note">{tr("使用可能: {name} / {operation} / {scale} / {width} / {height}。拡張子は入力不要です。複数画像では {name} に元拡張子を自動付加して衝突を減らします。", "Available: {name} / {operation} / {scale} / {width} / {height}. Do not type an extension. In batch mode, {name} automatically includes the source extension to reduce collisions.")}</p>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head">
+                  <div><strong>{copy.outputAlias}</strong><small>{copy.outputAliasDetail}</small></div>
+                </div>
+                <div className={`settings-alias-row ${uiPreferences.outputAliasEnabled ? "active" : ""}`}>
+                  <div><span>{tr("リンク保存先", "Link destination")}</span><code>/Users/naomac/Pictures/Agent-2D</code></div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={uiPreferences.outputAliasEnabled}
+                    className={uiPreferences.outputAliasEnabled ? "active" : ""}
+                    onClick={() => setUiPreferences((current) => ({ ...current, outputAliasEnabled: !current.outputAliasEnabled }))}
+                  >{uiPreferences.outputAliasEnabled ? "ON" : "OFF"}</button>
+                </div>
+              </section>
+              <section className="settings-section">
                 <div className="settings-section-head shortcut-head">
                   <div><strong>{copy.shortcuts}</strong><small>{copy.shortcutsDetail}</small></div>
                   <button type="button" onClick={() => setUiPreferences((current) => ({ ...current, shortcuts: { ...DEFAULT_SHORTCUTS } }))}>{copy.reset}</button>
@@ -2008,7 +2236,7 @@ export default function App() {
         document.body,
       )}
 
-      {runtimeChecked && !capabilities && (
+      {runtimeChecked && !capabilities && (operation === "enhance" || operation === "optimize") && srPreset !== "graphics" && (
         <div className="runtime-alert">
           <span>{tr("Real-ESRGAN runtime未導入", "Real-ESRGAN runtime is not installed")}</span>
           <button className="runtime-install" onClick={installManagedRuntime} disabled={installingRuntime}>
@@ -2019,9 +2247,9 @@ export default function App() {
 
       <div className="app-navigation">
         <section className="mode-tabs" aria-label="Operation">
-          {OPERATION_ORDER.map((item, index) => (
-            <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]], uiLanguage)} · ${modeLabel(item)}`}>
-              {modeLabel(item)}
+          {NAV_OPERATION_ORDER.map((item, index) => (
+            <button key={item} className={activeNavOperation === item ? "active" : ""} onClick={() => setOperation(operationForNav(item, cutoutMode))} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]], uiLanguage)} · ${navModeLabel(item)}`}>
+              {navModeLabel(item)}
               <small>{operationSubtitle(item, uiLanguage)}</small>
             </button>
           ))}
@@ -2030,24 +2258,21 @@ export default function App() {
 
       <section className="workspace-grid">
         <aside className="control-panel">
-          {operation !== "crop" && operation !== "object-edit" && (
-            <div className="input-mode-bar">
-              <div>
-                <strong>{copy.batchInput}</strong>
-                <small>{multiMode ? copy.multiple : copy.single}</small>
-              </div>
-              <button className={`multi-toggle ${multiMode ? "active" : ""}`} onClick={toggleMultiMode} disabled={running}>
-                <span className="toggle-track"><i /></span>
-                {copy.multiple}
+          {activeNavOperation === "cutout" && (
+            <div className="cutout-mode-tabs" role="tablist" aria-label={tr("切り抜き方法", "Cutout method")}>
+              <button type="button" role="tab" aria-selected={cutoutMode === "auto"} className={cutoutMode === "auto" ? "active" : ""} onClick={() => { setCutoutMode("auto"); setOperation("remove-bg"); }} disabled={running}>
+                <strong>{tr("自動背景透過", "Auto Remove BG")}</strong><small>FeyNoBg</small>
+              </button>
+              <button type="button" role="tab" aria-selected={cutoutMode === "object"} className={cutoutMode === "object" ? "active" : ""} onClick={() => { setCutoutMode("object"); setOperation("object-edit"); }} disabled={running}>
+                <strong>{tr("クリック選択・削除", "Object Edit")}</strong><small>SAM 2.1 + LaMa</small>
               </button>
             </div>
           )}
-
           {multiMode && queue.length > 0 && (
             <div className="queue-card">
               <div className="queue-head">
                 <span>{queue.length} images</span>
-                <button onClick={() => setQueue([])} disabled={running}>{copy.clear}</button>
+                <button onClick={clearQueue} disabled={running}>{copy.clear}</button>
               </div>
               <div className="queue-list">
                 {queue.map((entry, index) => (
@@ -2095,41 +2320,46 @@ export default function App() {
                   {tr("元画像と同じ", "Match source")} {inputInfo ? `${inputInfo.width}×${inputInfo.height}` : ""}
                 </button>
                 <div className="source-multiplier-tools" aria-label={tr("元画像サイズ倍率", "Source-size multiplier")}>
-                  <span>{tr("元画像倍率", "Source scale")}</span>
-                  {[1, 2, 4].map((multiplier) => (
-                    <button
-                      key={multiplier}
-                      type="button"
-                      className={inputInfo
-                        && targetWidth === Math.round(inputInfo.width * multiplier)
-                        && targetHeight === Math.round(inputInfo.height * multiplier)
-                        ? "active"
-                        : ""}
-                      onClick={() => applySourceSizeMultiplier(multiplier)}
-                      disabled={running || !inputInfo || multiplier > maxSourceSizeMultiplier}
-                    >
-                      {multiplier}×
-                    </button>
-                  ))}
-                  <div className="source-multiplier-input">
-                    <NumberStepper
-                      value={sourceSizeMultiplier}
-                      onChange={(value) => setSourceSizeMultiplier(clamp(value, 0.1, maxSourceSizeMultiplier))}
-                      min={0.1}
-                      max={Number(maxSourceSizeMultiplier.toFixed(2))}
-                      step={0.1}
-                      disabled={running || !inputInfo}
-                      ariaLabel={tr("元画像サイズ倍率", "Source-size multiplier")}
-                      suffix="×"
-                      language={uiLanguage}
-                      onEnter={() => applySourceSizeMultiplier(sourceSizeMultiplier)}
-                    />
+                  <div className="source-scale-head"><span>{tr("倍率プリセット", "Scale presets")}</span><small>{tr("縮小から拡大まで元画像基準", "Relative to source size")}</small></div>
+                  <div className="source-scale-presets">
+                    {SOURCE_SCALE_PRESETS.map(({ value, label }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        className={inputInfo
+                          && targetWidth === Math.max(1, Math.round(inputInfo.width * value))
+                          && targetHeight === Math.max(1, Math.round(inputInfo.height * value))
+                          ? "active"
+                          : ""}
+                        onClick={() => applySourceSizeMultiplier(value)}
+                        disabled={running || !inputInfo || value > maxSourceSizeMultiplier}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                  <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>{tr("適用", "Apply")}</button>
+                  <div className="source-custom-scale">
+                    <span>Custom</span>
+                    <div className="source-multiplier-input">
+                      <NumberStepper
+                        value={sourceSizeMultiplier}
+                        onChange={(value) => setSourceSizeMultiplier(clamp(value, 0.1, maxSourceSizeMultiplier))}
+                        min={0.1}
+                        max={Number(maxSourceSizeMultiplier.toFixed(3))}
+                        step={0.025}
+                        disabled={running || !inputInfo}
+                        ariaLabel={tr("カスタム元画像倍率", "Custom source-size multiplier")}
+                        suffix="×"
+                        language={uiLanguage}
+                        onEnter={() => applySourceSizeMultiplier(sourceSizeMultiplier)}
+                      />
+                    </div>
+                    <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>{tr("適用", "Apply")}</button>
+                  </div>
                 </div>
                 {inputInfo && (
                   <small className="source-size-preview">
-                    {sourceSizeMultiplier.toFixed(sourceSizeMultiplier % 1 === 0 ? 0 : 1)}× → {Math.round(inputInfo.width * sourceSizeMultiplier)}×{Math.round(inputInfo.height * sourceSizeMultiplier)} px
+                    {sourceScaleLabel(sourceSizeMultiplier)} → {Math.round(inputInfo.width * sourceSizeMultiplier)}×{Math.round(inputInfo.height * sourceSizeMultiplier)} px
                   </small>
                 )}
               </div>
@@ -2330,6 +2560,17 @@ export default function App() {
           {(operation === "enhance" || operation === "optimize") && (
             <>
               <div className="section-label">SUPER RESOLUTION</div>
+              <div className={`sr-content-field ${srPreset === "graphics" ? "crisp" : ""}`}>
+                <div className="field-title"><span>{tr("画像タイプ", "Content")}</span></div>
+                <select value={srPreset} onChange={(event) => { const next = event.target.value as SrContentPreset; setSrPreset(next); if (next !== "general") setModelId(""); }} disabled={running || scale === 1}>
+                  <option value="general">General · {tr("標準", "Standard")}</option>
+                  <option value="photo">Photo</option>
+                  <option value="illustration">Illustration</option>
+                  <option value="ai-art">AI Art / CG</option>
+                  <option value="graphics">Crisp Graphics · {tr("ロゴ/アイコン", "Logo / Icon")}</option>
+                </select>
+                {srPreset === "graphics" && <div className="crisp-graphics-note"><strong>Crisp Graphics</strong><span>{tr("写真向けAIを使わず、輪郭保持リサイズ+軽いシャープ処理で極小ロゴ/アイコンのモヤつきと架空ディテールを抑えます。", "Bypasses photo-oriented AI and uses edge-preserving resize + light sharpening to keep tiny logos/icons crisp without invented texture.")}</span></div>}
+              </div>
               <div className="field-row two sr-mode-row">
                 <div className="field-control">
                   <div className="field-title"><span>Scale</span></div>
@@ -2354,7 +2595,7 @@ export default function App() {
                       <em>{tr("Speed専用Modeはありません。速度差は主にScaleとModelで決まり、軽さ重視なら animevideov3 が候補です。", "There is no speed-only Mode. Runtime is driven mainly by Scale and Model; animevideov3 is an option when lower processing cost matters.")}</em>
                     </InfoHint>
                   </div>
-                  <select value={srMode} onChange={(event) => setSrMode(event.target.value as SrMode)} disabled={running || scale === 1}>
+                  <select value={srMode} onChange={(event) => setSrMode(event.target.value as SrMode)} disabled={running || scale === 1 || srPreset === "graphics"}>
                     <option value="fidelity">Fidelity</option>
                     <option value="balanced">Balanced · {tr("推奨", "Recommended")}</option>
                     <option value="perceptual">Perceptual</option>
@@ -2378,7 +2619,7 @@ export default function App() {
                     <em>{tr("Auto routeで質感が抽象化する場合は、宇宙CGでは x4plus を手動固定してください。", "If Auto route abstracts the texture too much, manually pin x4plus for space CG.")}</em>
                   </InfoHint>
                 </div>
-                <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={running || scale === 1}>
+                <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={running || scale === 1 || srPreset === "graphics"}>
                   <option value="">Auto route · {tr("推奨", "Recommended")}</option>
                   {capabilities?.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
                 </select>
@@ -2390,11 +2631,7 @@ export default function App() {
             <>
               <div className="section-label">OUTPUT FORMATS</div>
               <div className={`format-selector ${operation === "remove-bg" || operation === "object-edit" ? "alpha-only" : ""}`} role="group" aria-label={tr("出力形式を複数選択", "Select output formats")}>
-                {(operation === "remove-bg"
-                  ? BACKGROUND_OUTPUT_FORMATS
-                  : operation === "object-edit"
-                    ? (objectAction === "remove-and-fill" ? OBJECT_FILL_OUTPUT_FORMATS : OBJECT_ALPHA_OUTPUT_FORMATS)
-                    : OUTPUT_FORMATS).map((item) => {
+                {displayedFormatOptions.map((item) => {
                   const active = selectedFormats.includes(item.id);
                   return (
                     <button

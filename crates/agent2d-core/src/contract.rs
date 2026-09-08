@@ -118,6 +118,7 @@ pub enum SuperResolutionPreset {
     Photo,
     Illustration,
     AiArt,
+    Graphics,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +137,8 @@ pub enum OutputFormat {
     Webp,
     Avif,
     Jxl,
+    Tiff,
+    Bmp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -169,6 +172,7 @@ pub struct UpscaleOptions {
     pub target_width: Option<u32>,
     pub target_height: Option<u32>,
     pub mode: SuperResolutionMode,
+    pub preset: Option<SuperResolutionPreset>,
     pub model_id: Option<String>,
 }
 

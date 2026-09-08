@@ -38,7 +38,7 @@ pub fn inspect_image(request: &InspectRequest) -> Result<InspectResult, Agent2DE
         })?;
 
     match extension.as_str() {
-        "png" | "jpg" | "jpeg" | "webp" => inspect_with_image(path, metadata.len()),
+        "png" | "jpg" | "jpeg" | "webp" | "tif" | "tiff" | "bmp" => inspect_with_image(path, metadata.len()),
         "avif" | "jxl" => inspect_with_ffprobe(path, metadata.len(), &extension),
         other => Err(Agent2DError::UnsupportedFormat {
             format: other.to_owned(),
@@ -66,7 +66,7 @@ fn inspect_with_image(path: &Path, input_bytes: u64) -> Result<InspectResult, Ag
 
     if !matches!(
         format,
-        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP
+        ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Tiff | ImageFormat::Bmp
     ) {
         return Err(Agent2DError::UnsupportedFormat {
             format: canonical_format_name(format),
@@ -173,6 +173,8 @@ fn canonical_format_name(format: ImageFormat) -> String {
         ImageFormat::Png => "png".to_owned(),
         ImageFormat::Jpeg => "jpeg".to_owned(),
         ImageFormat::WebP => "webp".to_owned(),
+        ImageFormat::Tiff => "tiff".to_owned(),
+        ImageFormat::Bmp => "bmp".to_owned(),
         other => format!("{other:?}").to_lowercase(),
     }
 }

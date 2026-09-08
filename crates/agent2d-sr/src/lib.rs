@@ -12,7 +12,7 @@ use agent2d_core::{
     SuperResolutionPreset, UpscaleRequest, UpscaleScale, cleanup_output, inspect_image,
     validate_output_path,
 };
-use image::{GenericImageView, imageops::FilterType};
+use image::{DynamicImage, GenericImageView, imageops::{self, FilterType}};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -69,15 +69,19 @@ pub fn upscale_image_with_cancel(
     })?;
     validate_output_path(&request.input_path, &request.output_path)?;
 
-    let runtime = discover_runtime()?;
-    let models = discover_models(&runtime.model_dir)?;
-    let model_id = resolve_model_id(request, &models)?;
     let requested_scale = request.scale.unwrap_or(UpscaleScale::X2).get();
     if requested_scale == 1 {
         return Err(Agent2DError::UnsupportedUpscale {
             message: "scale 1 is a no-SR conversion path and must be handled by the caller without starting the NCNN runtime".into(),
         });
     }
+    if request.preset == Some(SuperResolutionPreset::Graphics) {
+        return upscale_crisp_graphics(request, &input, requested_scale, cancellation, started);
+    }
+
+    let runtime = discover_runtime()?;
+    let models = discover_models(&runtime.model_dir)?;
+    let model_id = resolve_model_id(request, &models)?;
     let output_format = output_format_for_path(&request.output_path)?;
     if request.target_width.is_some() || request.target_height.is_some() {
         return Err(Agent2DError::UnsupportedUpscale {
@@ -232,6 +236,86 @@ pub fn upscale_image_with_cancel(
             }
             warnings
         },
+    })
+}
+
+fn upscale_crisp_graphics(
+    request: &UpscaleRequest,
+    input: &agent2d_core::InspectResult,
+    requested_scale: u8,
+    cancellation: &CancellationToken,
+    started: Instant,
+) -> Result<Agent2DResult, Agent2DError> {
+    if request.target_width.is_some() || request.target_height.is_some() {
+        return Err(Agent2DError::UnsupportedUpscale {
+            message: "Crisp Graphics currently uses scale 2/3/4; custom target dimensions belong to Custom sizing".into(),
+        });
+    }
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let prepared_input = prepare_sr_input(&request.input_path, &input.format, cancellation)?;
+    let source = prepared_input.as_deref().unwrap_or(&request.input_path);
+    let decoded = image::open(source).map_err(|source_error| Agent2DError::ImageDecode {
+        path: display_path(source),
+        source: source_error,
+    })?;
+    let source_rgba = decoded.to_rgba8();
+    let target_width = input.width.saturating_mul(requested_scale as u32);
+    let target_height = input.height.saturating_mul(requested_scale as u32);
+
+    let resized = if requested_scale >= 4 {
+        let step = imageops::resize(
+            &source_rgba,
+            input.width.saturating_mul(2),
+            input.height.saturating_mul(2),
+            FilterType::Nearest,
+        );
+        imageops::resize(&step, target_width, target_height, FilterType::CatmullRom)
+    } else {
+        imageops::resize(&source_rgba, target_width, target_height, FilterType::CatmullRom)
+    };
+    let mut sharpened = imageops::unsharpen(&resized, 0.72, 1);
+    for (dst, src) in sharpened.pixels_mut().zip(resized.pixels()) {
+        dst.0[3] = src.0[3];
+    }
+    if cancellation.is_cancelled() {
+        if let Some(path) = prepared_input.as_ref() { cleanup_output(path); }
+        return Err(Agent2DError::Cancelled);
+    }
+    DynamicImage::ImageRgba8(sharpened)
+        .save(&request.output_path)
+        .map_err(|error| Agent2DError::ImageWrite {
+            path: display_path(&request.output_path),
+            message: error.to_string(),
+        })?;
+    if let Some(path) = prepared_input.as_ref() { cleanup_output(path); }
+
+    let output_bytes = fs::metadata(&request.output_path)
+        .map_err(|error| Agent2DError::ImageWrite {
+            path: display_path(&request.output_path),
+            message: error.to_string(),
+        })?
+        .len();
+    Ok(Agent2DResult {
+        job_id: Uuid::new_v4().to_string(),
+        input_path: request.input_path.clone(),
+        output_path: request.output_path.clone(),
+        input_width: input.width,
+        input_height: input.height,
+        output_width: target_width,
+        output_height: target_height,
+        input_bytes: input.input_bytes,
+        output_bytes,
+        compression_ratio: if output_bytes == 0 { 0.0 } else { input.input_bytes as f64 / output_bytes as f64 },
+        model_id: Some("crisp-graphics-local".into()),
+        codec: Some("catmullrom-unsharp".into()),
+        pixel_exact: Some(false),
+        elapsed_ms: started.elapsed().as_millis() as u64,
+        warnings: vec![
+            "crisp_graphics_non_ai_edge_preserving_upscale".into(),
+            "designed_for_tiny_logos_icons_and_flat_graphics".into(),
+        ],
     })
 }
 
@@ -494,6 +578,37 @@ mod tests {
                     .any(|warning| warning == "native_scale_4_downsampled_to_2_lanczos3")
             );
         }
+    }
+
+    #[test]
+    fn crisp_graphics_x4_runs_without_managed_runtime() {
+        let dir = tempdir().unwrap();
+        let input = dir.path().join("tiny-logo.png");
+        let output = dir.path().join("tiny-logo-crisp.png");
+        let mut image = RgbImage::from_pixel(12, 12, Rgb([8, 12, 16]));
+        for index in 2..10 {
+            image.put_pixel(index, 5, Rgb([30, 245, 120]));
+            image.put_pixel(5, index, Rgb([150, 40, 220]));
+        }
+        image.save_with_format(&input, ImageFormat::Png).unwrap();
+
+        let result = upscale_image(&UpscaleRequest {
+            input_path: input,
+            output_path: output.clone(),
+            scale: Some(UpscaleScale::X4),
+            target_width: None,
+            target_height: None,
+            mode: SuperResolutionMode::Fidelity,
+            preset: Some(SuperResolutionPreset::Graphics),
+            model_id: None,
+        })
+        .unwrap();
+
+        assert_eq!((result.output_width, result.output_height), (48, 48));
+        assert_eq!(result.model_id.as_deref(), Some("crisp-graphics-local"));
+        assert_eq!(result.codec.as_deref(), Some("catmullrom-unsharp"));
+        assert!(output.is_file());
+        assert!(result.warnings.iter().any(|warning| warning == "crisp_graphics_non_ai_edge_preserving_upscale"));
     }
 
     #[test]

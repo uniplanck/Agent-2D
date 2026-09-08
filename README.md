@@ -29,15 +29,14 @@ The same Rust processing core powers the Desktop app, CLI, and MCP server. Image
 
 | Capability | What it does | Main engine |
 | --- | --- | --- |
-| **Enhance** | 1× / 2× / 4× super resolution | Real-ESRGAN + NCNN/Vulkan |
+| **Enhance** | 1× / 2× / 4× AI super resolution or deterministic **Crisp Graphics** scaling for tiny logos/icons | Real-ESRGAN + NCNN/Vulkan / local edge-preserving scaler |
 | **Compress** | Compress or convert while preserving dimensions | Rust image pipeline + local codecs |
 | **Optimize** | Super resolution followed by compression | Shared Rust pipeline |
-| **Custom** | Exact output size, framing, zoom, position, presets, and optional target file size | Shared Rust pipeline |
-| **Remove BG** | High-quality transparent foreground extraction | FeyNoBg + alpha matting |
-| **Object Edit** | Click / negative-click / box selection, transparency, isolation, and erase-and-fill | SAM 2.1 Base+ + Big-LaMa |
+| **Custom** | Exact output size, framing, zoom, position, ⅛× / ¼× / ½× / 1× / 2× / 4× source-relative presets, Custom scale, and optional target file size | Shared Rust pipeline |
+| **Cutout** | Two sidebar modes: automatic background removal or click/box object editing and erase-and-fill | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | Convert logos, icons, line art, and flat illustrations to real SVG paths | VTracer |
 
-Agent-2D also supports PNG, JPEG, WebP, AVIF, and JPEG XL input/output paths where the selected operation permits them, multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, multiple UI themes, and Japanese/English application UI.
+Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary visible formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The selected operation still controls which formats are valid. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, multiple UI themes, and Japanese/English application UI are included.
 
 ### Interfaces
 
@@ -105,6 +104,12 @@ Managed runtime location:
 
 The Real-ESRGAN archive is pinned by SHA-256 in the implementation and downloaded from the upstream project.
 
+For tiny logos, icons, UI marks, or flat graphics where photo-oriented AI can soften edges or invent texture, choose **Crisp Graphics** in the Desktop Content selector or use `--preset graphics` from CLI/MCP. This route deliberately bypasses Real-ESRGAN and uses a deterministic edge-preserving resize plus light sharpening. It cannot reconstruct detail that is absent from the source, but it avoids turning a tiny graphic into a larger blur.
+
+```bash
+cargo run -p agent2d-cli -- enhance tiny-logo.png crisp.png --scale 4 --preset graphics --format png
+```
+
 #### Background removal
 
 ```bash
@@ -130,7 +135,7 @@ cargo run -p agent2d-cli -- object-bridge
 
 ### Custom framing and multi-format output
 
-Custom mode supports exact dimensions or a source-relative multiplier.
+Custom mode supports exact dimensions or a source-relative multiplier. The Desktop exposes quick source-relative presets for **⅛×, ¼×, ½×, 1×, 2×, and 4×**, plus an editable Custom multiplier.
 
 ```bash
 # Exact 1080 × 1350 frame with two output formats
@@ -225,15 +230,14 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 | 機能 | 内容 | 主なエンジン |
 | --- | --- | --- |
-| **Enhance** | 1× / 2× / 4×の超解像 | Real-ESRGAN + NCNN/Vulkan |
+| **Enhance** | 1× / 2× / 4×のAI超解像、または極小ロゴ/アイコン向けの**Crisp Graphics**拡大 | Real-ESRGAN + NCNN/Vulkan / ローカル輪郭保持scaler |
 | **Compress** | 解像度を維持した圧縮・形式変換 | Rust画像処理 + ローカルcodec |
 | **Optimize** | 超解像のあとに圧縮 | 共通Rust pipeline |
-| **Custom** | 指定サイズ、構図、Zoom、位置、Preset、最大ファイル容量 | 共通Rust pipeline |
-| **Remove BG** | 高品質な背景透過 | FeyNoBg + alpha matting |
-| **Object Edit** | クリック/除外クリック/Box選択、切り抜き、透明化、自然削除 | SAM 2.1 Base+ + Big-LaMa |
+| **Custom** | 指定サイズ、構図、Zoom、位置、⅛× / ¼× / ½× / 1× / 2× / 4×の倍率Preset、Custom倍率、最大ファイル容量 | 共通Rust pipeline |
+| **Cutout** | サイドバーの2モードから、自動背景透過またはクリック/Box選択・透明化・自然削除を選ぶ | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | ロゴ・アイコン・線画・フラットイラストをSVG pathへ変換 | VTracer |
 
-PNG、JPEG、WebP、AVIF、JPEG XLの入出力経路を持ち、処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もできます。DesktopではBefore / After比較、Theme切替、編集可能なKeyboard Shortcut、日本語/英語UIも利用できます。
+標準表示する主要形式はPNG、JPEG、WebP、AVIF、JPEG XLの5種です。加えてTIFFとBMPをlossless形式として利用でき、**設定 → 出力形式**から表示/非表示を切り替えられます。処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もできます。DesktopではBefore / After比較、Theme切替、編集可能なKeyboard Shortcut、日本語/英語UIも利用できます。
 
 ### なぜローカルで動かすのか
 
@@ -303,6 +307,12 @@ cargo run -p agent2d-cli -- capabilities
 
 Real-ESRGANのruntimeは上流releaseから取得し、実装側でSHA-256を固定しています。
 
+極小ロゴ、アイコン、UI記号、ベタ塗りグラフィックでは、写真向けAI超解像が境界を丸めたり、元にない質感を足したりすることがあります。**Crisp Graphics**はその用途を分離した経路です。Real-ESRGANを通さず、輪郭を保つリサイズと軽いsharp処理だけで拡大します。存在しない細部を復元する機能ではありませんが、「小さなモヤをAIでもっと大きなモヤにする」挙動を避けたいときに向いています。
+
+```bash
+cargo run -p agent2d-cli -- enhance tiny-logo.png crisp.png --scale 4 --preset graphics --format png
+```
+
 ### 背景透過runtime
 
 ```bash
@@ -330,7 +340,7 @@ cargo run -p agent2d-cli -- object-bridge
 
 ### Customと複数形式書き出し
 
-Customでは、固定のpxサイズだけでなく、元画像基準の倍率も使えます。
+Customでは、固定のpxサイズだけでなく、元画像基準の倍率も使えます。Desktopには**⅛×、¼×、½×、1×、2×、4×**の即時Presetと、任意倍率を入力するCustom欄があります。
 
 ```bash
 # 1080 × 1350へ構図を合わせ、PNGとJPEGを同時出力
