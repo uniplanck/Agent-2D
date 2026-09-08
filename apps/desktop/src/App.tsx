@@ -1706,6 +1706,45 @@ export default function App() {
     }
   };
 
+  const clearInput = () => {
+    if (running) return;
+    cancelBatchRef.current = false;
+    setInputPath("");
+    setInputInfo(null);
+    setInputPreview("");
+    setOutputPreview("");
+    setResult(null);
+    setOutputResults([]);
+    setComparisonOutputs([]);
+    setComparisonFormat(effectiveFormat);
+    setOutputName("");
+    setOutputPath("");
+    if (!outputDirectoryPinnedRef.current) setOutputDirectory("");
+    setJob(null);
+    setJobTiming(null);
+    setError("");
+    setMultiMode(false);
+    setQueue([]);
+    setBatchRunning(false);
+    setDragActive(false);
+    setComparePosition(50);
+    setSourceSizeMultiplier(1);
+    setCropZoom(1);
+    setCropX(0);
+    setCropY(0);
+    setObjectPoints([]);
+    setObjectBox(null);
+    setObjectBoxDraft(null);
+    setObjectMaskPreview("");
+    setObjectMaskScore(null);
+    setObjectMaskLoading(false);
+    setObjectZoom(1);
+    setObjectPan({ x: 0, y: 0 });
+    objectUndoStackRef.current = [];
+    setObjectUndoDepth(0);
+    objectMaskRequestRef.current += 1;
+  };
+
   const clearQueue = () => {
     if (running) return;
     setQueue([]);
@@ -2707,7 +2746,7 @@ export default function App() {
               <figcaption>
                 <div><span className="before-label">CUSTOM FRAME</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
                 <div className="crop-caption-center">{targetWidth}×{targetHeight}px · {cropZoom.toFixed(2)}×</div>
-                <div><span className="after-label">OUTPUT</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}</div>
+                <div><span className="after-label">OUTPUT</span>{result && <b>{result.outputWidth}×{result.outputHeight}</b>}{inputPreview && <button type="button" className="preview-clear-button" onClick={clearInput} disabled={running} aria-label={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")} title={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")}>×</button>}</div>
               </figcaption>
               <div className="crop-workbench">
                 {inputPreview ? (
@@ -2767,7 +2806,7 @@ export default function App() {
                   <button type="button" onClick={() => setObjectZoom((value) => clamp(value + 0.2, 1, 6))} disabled={running || !inputPreview}>＋</button>
                   <button type="button" onClick={() => { setObjectZoom(1); setObjectPan({ x: 0, y: 0 }); }} disabled={running || !inputPreview}>Fit</button>
                 </div>
-                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{!inputPreview ? copy.imageNotSelected : objectMaskLoading ? tr("選択中…", "Selecting…") : objectMaskPreview ? copy.selected : copy.objectSelect}</span></div>
+                <div title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}><span className="after-label">{!inputPreview ? copy.imageNotSelected : objectMaskLoading ? tr("選択中…", "Selecting…") : objectMaskPreview ? copy.selected : copy.objectSelect}</span>{inputPreview && <button type="button" className="preview-clear-button" onClick={clearInput} disabled={running} aria-label={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")} title={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")}>×</button>}</div>
               </figcaption>
               {inputPreview && (
                 <div className="object-canvas-toolbar object-canvas-toolbar-docked" role="group" aria-label="Object selection tool">
@@ -2848,7 +2887,7 @@ export default function App() {
             <figcaption>
               <div><span className="before-label">BEFORE</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
               <div className="compare-help">{tr("← Afterを広く · drag · Beforeを広く →", "← More After · drag · More Before →")}</div>
-              <div><span className="after-label">AFTER</span>{displayResult && <b>{displayResult.outputWidth}×{displayResult.outputHeight}</b>}</div>
+              <div><span className="after-label">AFTER</span>{displayResult && <b>{displayResult.outputWidth}×{displayResult.outputHeight}</b>}{inputPreview && <button type="button" className="preview-clear-button" onClick={clearInput} disabled={running} aria-label={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")} title={tr("画像を閉じて初期画面に戻る", "Clear image and return to start")}>×</button>}</div>
             </figcaption>
             {comparisonOutputs.length > 1 && (
               <div className="compare-format-tabs" role="tablist" aria-label={tr("Before / After 出力形式", "Before / After output format")}>

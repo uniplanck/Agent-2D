@@ -300,6 +300,9 @@ select:disabled, input:disabled { opacity: .65; }
 .comparison-card figcaption > div { min-width: 0; display: flex; align-items: center; gap: 7px; }
 .comparison-card figcaption > div:last-child { justify-content: flex-end; }
 .comparison-card figcaption b { color: #596a82; font-size: 9px; font-weight: 600; letter-spacing: 0; }
+.preview-clear-button { width: 23px; height: 23px; flex: 0 0 23px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-strong, #33465f); border-radius: 50%; background: var(--surface-soft, #111a27); color: var(--muted, #7d8da4); padding: 0 0 1px; font-size: 16px; font-weight: 500; line-height: 1; letter-spacing: 0; cursor: pointer; transition: 120ms ease; }
+.preview-clear-button:hover:not(:disabled) { border-color: var(--accent, #5d82b2); background: var(--surface-hover, #182538); color: var(--text-strong, #edf4ff); transform: scale(1.04); }
+.preview-clear-button:disabled { opacity: .42; cursor: default; }
 .compare-format-tabs { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 5px 9px; border-bottom: 1px solid #192331; background: rgba(10,15,23,.88); }
 .compare-format-tabs button { min-width: 68px; height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid #324762; border-radius: 8px; background: #101a29; color: #8399b5; padding: 0 10px; cursor: pointer; }
 .compare-format-tabs button strong { color: inherit; font-size: 9px; }
