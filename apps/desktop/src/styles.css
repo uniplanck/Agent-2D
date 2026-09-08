@@ -503,8 +503,14 @@ body { background: var(--app-bg); color: var(--text); }
 .drop-zone span:not(.drop-icon), .quality-note, .background-removal-head span, .background-removal-card p, .object-runtime-head div span, .vectorize-note, .vector-color-field, .object-selection-meta, .object-feather-field { color: var(--muted); }
 select, input { border-color: var(--border); background: var(--surface); color: var(--text-strong); }
 select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--focus); background: var(--surface); }
-.number-stepper-actions button, .size-toolbar button, .crop-controls button, .source-multiplier-tools > button, .preset-save-row button, .output-folder-row button { border-color: var(--border-strong); background: var(--surface-soft); color: var(--text); }
-.number-stepper-actions button:hover:not(:disabled), .size-toolbar button:hover:not(:disabled), .crop-controls button:hover:not(:disabled), .source-multiplier-tools > button:hover:not(:disabled), .output-folder-row button:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-hover); color: var(--text-strong); }
+.number-stepper-actions button, .size-toolbar button, .crop-controls button, .source-size-button, .source-multiplier-tools > button, .preset-save-row button, .output-folder-row button, .background-runtime-install button { border-color: var(--border-strong); background: var(--surface-soft); color: var(--text); }
+.number-stepper-actions button:hover:not(:disabled), .size-toolbar button:hover:not(:disabled), .crop-controls button:hover:not(:disabled), .source-size-button:hover:not(:disabled), .source-multiplier-tools > button:hover:not(:disabled), .output-folder-row button:hover:not(:disabled), .background-runtime-install button:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-hover); color: var(--text-strong); }
+.source-multiplier-tools > span, .source-size-preview { color: var(--muted); }
+.size-cap-toggle span { color: var(--text) !important; }
+.size-cap-fields strong { color: var(--text-strong); }
+.size-cap-card p { color: var(--muted); }
+.crop-zoom-head, .nudge-area > span { color: var(--muted); }
+.crop-zoom-head strong { color: var(--text-strong); }
 .format-selector button strong { color: var(--text-strong); }
 .format-selector button small { color: var(--muted); }
 .format-selector button:hover:not(:disabled) { border-color: var(--border-strong); color: var(--text-strong); background: var(--surface-hover); }
@@ -520,6 +526,20 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .output-folder-display span, .output-preview-line, .job-line, .job-meta { color: var(--muted); }
 .output-preview-line code, .resolved-output { color: var(--text); }
 .output-folder-display strong, .result-strip strong { color: var(--text-strong); }
+.output-results-list span { border-color: var(--border); background: var(--surface-soft); color: var(--text); }
+.compare-format-tabs { border-color: var(--border); background: var(--surface-soft); }
+.compare-format-tabs button { border-color: var(--border-strong); background: var(--surface); color: var(--text); }
+.compare-format-tabs button small { color: var(--muted); }
+.compare-format-tabs button:hover { border-color: var(--accent); background: var(--surface-hover); color: var(--text-strong); }
+.compare-format-tabs button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--text-strong); }
+.compare-format-tabs button.active small { color: var(--accent); }
+.result-waiting { border-color: var(--border-strong); background: var(--surface); color: var(--muted); box-shadow: var(--shadow); }
+.result-strip > div { border-color: var(--border); background: var(--surface); }
+.result-strip span { color: var(--muted); }
+.crop-helpbar, .compare-help { color: var(--muted); border-color: var(--border); }
+.runtime-alert { border-color: var(--border-strong); background: var(--surface-soft); color: var(--text); }
+.runtime-install { border-color: var(--accent); background: var(--accent-soft); color: var(--text-strong); }
+.runtime-install:hover:not(:disabled) { background: var(--surface-hover); }
 .action-row .primary { background: linear-gradient(135deg,var(--accent),var(--accent-2)); color: var(--on-accent); box-shadow: 0 10px 30px var(--focus); }
 .preview-card, .crop-card, .comparison-card, .object-edit-card { background: var(--surface); }
 .comparison-stage, .object-edit-stage, .crop-workbench, .image-stage { background: var(--canvas); }
@@ -548,6 +568,30 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px v
 .object-canvas-toolbar button { min-height: 38px; border-color: transparent; background: transparent; color: var(--text); padding: 0 13px; }
 .object-canvas-toolbar button:hover:not(:disabled), .object-canvas-toolbar button.active { border-color: var(--border-strong); background: var(--surface-hover); color: var(--text-strong); }
 .object-canvas-toolbar > i { margin-left: auto; background: var(--border); }
+
+/* Disabled controls stay visibly disabled without becoming illegible on light themes. */
+button:disabled { cursor: not-allowed; }
+select:disabled, input:disabled { opacity: 1; border-color: var(--border); background: var(--surface-soft); color: var(--muted); }
+.number-stepper-actions button:disabled,
+.source-size-button:disabled,
+.size-toolbar button:disabled,
+.crop-controls button:disabled,
+.source-multiplier-tools > button:disabled,
+.preset-save-row button:disabled,
+.output-folder-row button:disabled,
+.background-runtime-install button:disabled,
+.object-selection-meta button:disabled,
+.object-canvas-toolbar button:disabled,
+.object-view-controls button:disabled {
+  opacity: 1;
+  border-color: var(--border);
+  background: var(--surface-soft);
+  color: var(--muted);
+  box-shadow: none;
+}
+.action-row button:disabled { opacity: 1; }
+.action-row .primary:disabled { border: 1px solid var(--border); background: var(--surface-soft); color: var(--muted); box-shadow: none; }
+.mode-tabs button:disabled { opacity: .82; }
 .canvas-empty-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 32px; text-align: center; color: var(--muted); }
 .canvas-empty-state-static { position: relative; inset: auto; width: 100%; height: 100%; min-height: 280px; }
 .canvas-empty-mark { width: 42px; height: 42px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border-strong); border-radius: 13px; background: var(--surface); color: var(--accent); font-size: 20px; font-weight: 700; }
