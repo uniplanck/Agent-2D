@@ -257,10 +257,14 @@ Core quality checks include:
 - SAM 2.1 object-selection mask verification plus transparent object-edit and Big-LaMa erase-and-fill E2E when the managed Object Edit runtime is installed
 - MCP stdio client acceptance
 
+## License
+
+Agent-2D's own source code is released under the **MIT License**. See [`LICENSE`](LICENSE).
+
+Third-party libraries, command-line codecs, runtime binaries, and AI model weights remain subject to their own upstream licenses and terms. Agent-2D does not relicense those components. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the current dependency and runtime boundary.
+
 ## Distribution boundary
 
 The source tree does not vendor Upscayl code or models.
 
 The Real-ESRGAN runtime, FeyNoBg model/runtime dependencies, SAM 2.1 weights, and Big-LaMa checkpoint are downloaded from their upstream distribution channels only after an explicit user install action. Before distributing third-party binaries, Python packages, or model weights inside a future installer/package rather than downloading them at user request, include the applicable upstream license texts and notices. See `THIRD_PARTY_NOTICES.md`.
-
-The Agent-2D project's own public distribution license has not been declared yet; do not infer one from its dependencies.

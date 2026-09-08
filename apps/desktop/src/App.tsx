@@ -294,8 +294,8 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
     && event.shiftKey === parts.includes("Shift");
 }
 
-function shortcutDisplay(shortcut: string): string {
-  if (!shortcut) return "未設定";
+function shortcutDisplay(shortcut: string, language: ResolvedLanguage = "ja"): string {
+  if (!shortcut) return language === "ja" ? "未設定" : "Unassigned";
   const parts = shortcut.split("+");
   const code = parts.at(-1) ?? "";
   const symbol = code.startsWith("Digit") ? code.slice(5)
@@ -361,50 +361,66 @@ function formatQualityText(format: OutputFormat): string {
   return "JXL Lossless";
 }
 
-const MODE_HELP: Record<SrMode, { title: string; body: string; use: string }> = {
+type LocalizedHelp = { title: string; bodyJa: string; bodyEn: string; useJa: string; useEn: string };
+
+const MODE_HELP: Record<SrMode, LocalizedHelp> = {
   fidelity: {
     title: "Fidelity",
-    body: "原画像への忠実さを優先するrouting intentです。現行Real-ESRGANではModelを固定するとMode差は小さくなります。",
-    use: "写真・文字入り画像・過剰な質感追加を避けたいとき。",
+    bodyJa: "原画像への忠実さを優先するrouting intentです。現行Real-ESRGANではModelを固定するとMode差は小さくなります。",
+    bodyEn: "A routing intent that prioritizes fidelity to the source image. With the current Real-ESRGAN stack, Mode differences become smaller when a Model is fixed manually.",
+    useJa: "写真・文字入り画像・過剰な質感追加を避けたいとき。",
+    useEn: "Use for photos, images with text, and cases where you want to avoid invented texture.",
   },
   balanced: {
-    title: "Balanced · 推奨",
-    body: "品質と自然さの中間を狙う標準routing intentです。迷った場合の初期値です。",
-    use: "一般写真、Web画像、AI画像など用途が混在するとき。",
+    title: "Balanced",
+    bodyJa: "品質と自然さの中間を狙う標準routing intentです。迷った場合の初期値です。",
+    bodyEn: "The standard routing intent balancing detail and naturalness. This is the default when you are unsure.",
+    useJa: "一般写真、Web画像、AI画像など用途が混在するとき。",
+    useEn: "Use for mixed workloads such as general photos, web images, and AI-generated images.",
   },
   perceptual: {
     title: "Perceptual",
-    body: "見た目のディテール感を優先するためのrouting intentです。現行モデル群ではModel選択の影響の方が大きいです。",
-    use: "小さく柔らかい画像や、多少の推定ディテールを許容できるとき。",
+    bodyJa: "見た目のディテール感を優先するためのrouting intentです。現行モデル群ではModel選択の影響の方が大きいです。",
+    bodyEn: "A routing intent that favors perceived detail. With the current model set, the selected Model usually has a larger effect than this Mode.",
+    useJa: "小さく柔らかい画像や、多少の推定ディテールを許容できるとき。",
+    useEn: "Use for small or soft images when some inferred detail is acceptable.",
   },
 };
 
-function modelHelp(modelId: string): { title: string; body: string; use: string } {
+function modelHelp(modelId: string): LocalizedHelp {
   if (!modelId) {
     return {
-      title: "Auto route · 推奨",
-      body: "Modeと内蔵routing規則から利用可能なReal-ESRGANモデルを選びます。現在は保守的なroutingです。",
-      use: "モデル差を意識せず使いたいとき。まずはAuto + Balancedが基準です。",
+      title: "Auto route",
+      bodyJa: "Modeと内蔵routing規則から利用可能なReal-ESRGANモデルを選びます。現在は保守的なroutingです。",
+      bodyEn: "Selects an available Real-ESRGAN model from the chosen Mode and built-in routing rules. The current routing is intentionally conservative.",
+      useJa: "モデル差を意識せず使いたいとき。まずはAuto + Balancedが基準です。",
+      useEn: "Use when you do not want to manage model differences manually. Auto + Balanced is the baseline.",
     };
   }
   if (modelId.includes("x4plus-anime")) {
     return {
       title: "realesrgan-x4plus-anime",
-      body: "アニメ・イラスト・輪郭線を持つ画像向けの公式Real-ESRGANモデルです。",
-      use: "アニメ絵、マンガ調、イラスト、線画主体の画像。",
+      bodyJa: "アニメ・イラスト・輪郭線を持つ画像向けの公式Real-ESRGANモデルです。",
+      bodyEn: "The official Real-ESRGAN model for anime, illustrations, and images with strong line work.",
+      useJa: "アニメ絵、マンガ調、イラスト、線画主体の画像。",
+      useEn: "Use for anime artwork, manga-style images, illustrations, and line art.",
     };
   }
   if (modelId.includes("animevideov3")) {
     return {
       title: "realesr-animevideov3",
-      body: "アニメ映像系を想定した軽量寄りの公式モデルです。静止画にも利用できます。",
-      use: "アニメ系で処理負荷を抑えたい場合や、連続フレーム由来の画像。",
+      bodyJa: "アニメ映像系を想定した軽量寄りの公式モデルです。静止画にも利用できます。",
+      bodyEn: "A lighter official model designed for anime video. It can also be used for still images.",
+      useJa: "アニメ系で処理負荷を抑えたい場合や、連続フレーム由来の画像。",
+      useEn: "Use for anime content when lower processing cost matters or for images derived from sequential frames.",
     };
   }
   return {
     title: modelId,
-    body: "一般画像向けのReal-ESRGAN x4plus系モデルです。写真と混在コンテンツで基準になります。",
-    use: "写真、Web素材、一般画像。迷って手動固定するならこの系統。",
+    bodyJa: "一般画像向けのReal-ESRGAN x4plus系モデルです。写真と混在コンテンツで基準になります。",
+    bodyEn: "A Real-ESRGAN x4plus-family model for general imagery. It is the baseline for photos and mixed-content images.",
+    useJa: "写真、Web素材、一般画像。迷って手動固定するならこの系統。",
+    useEn: "Use for photos, web assets, and general images. If you want to pin a model manually, start here.",
   };
 }
 
@@ -417,6 +433,7 @@ function NumberStepper({
   disabled = false,
   ariaLabel,
   suffix,
+  language = "ja",
   onEnter,
 }: {
   value: number;
@@ -427,6 +444,7 @@ function NumberStepper({
   disabled?: boolean;
   ariaLabel: string;
   suffix?: string;
+  language?: ResolvedLanguage;
   onEnter?: () => void;
 }) {
   const precision = Math.max(0, `${step}`.split(".")[1]?.length ?? 0);
@@ -455,8 +473,8 @@ function NumberStepper({
       />
       {suffix && <span className="number-stepper-suffix">{suffix}</span>}
       <div className="number-stepper-actions" aria-hidden={disabled || undefined}>
-        <button type="button" onClick={() => onChange(normalize(value - step))} disabled={disabled || value <= min} aria-label={`${ariaLabel}を減らす`}>−</button>
-        <button type="button" onClick={() => onChange(normalize(value + step))} disabled={disabled || (max != null && value >= max)} aria-label={`${ariaLabel}を増やす`}>＋</button>
+        <button type="button" onClick={() => onChange(normalize(value - step))} disabled={disabled || value <= min} aria-label={language === "ja" ? `${ariaLabel}を減らす` : `Decrease ${ariaLabel}`}>−</button>
+        <button type="button" onClick={() => onChange(normalize(value + step))} disabled={disabled || (max != null && value >= max)} aria-label={language === "ja" ? `${ariaLabel}を増やす` : `Increase ${ariaLabel}`}>＋</button>
       </div>
     </div>
   );
@@ -465,11 +483,13 @@ function NumberStepper({
 function SizePresetMenu({
   disabled,
   presets,
+  language,
   onApply,
   onDelete,
 }: {
   disabled: boolean;
   presets: SavedSizePreset[];
+  language: ResolvedLanguage;
   onApply: (width: number, height: number) => void;
   onDelete: (id: string) => void;
 }) {
@@ -537,7 +557,7 @@ function SizePresetMenu({
   return (
     <>
       <div className="preset-menu" onMouseEnter={() => { cancelClose(); setOpenState(true); }} onMouseLeave={scheduleClose}>
-        <button ref={buttonRef} type="button" onClick={() => setOpenState((value) => !value)} disabled={disabled} aria-expanded={openState}>サイズプリセット ▾</button>
+        <button ref={buttonRef} type="button" onClick={() => setOpenState((value) => !value)} disabled={disabled} aria-expanded={openState}>{language === "ja" ? "サイズプリセット" : "Size presets"} ▾</button>
       </div>
       {openState && createPortal(
         <div
@@ -560,7 +580,7 @@ function SizePresetMenu({
               <button type="button" className="saved-preset-apply" onClick={() => { onApply(preset.width, preset.height); setOpenState(false); }}>
                 <span>{preset.name}</span><small>{preset.width}×{preset.height}</small>
               </button>
-              <button type="button" className="saved-preset-delete" aria-label={`${preset.name}を削除`} onClick={(event) => { event.stopPropagation(); onDelete(preset.id); }}>×</button>
+              <button type="button" className="saved-preset-delete" aria-label={language === "ja" ? `${preset.name}を削除` : `Delete ${preset.name}`} onClick={(event) => { event.stopPropagation(); onDelete(preset.id); }}>×</button>
             </div>
           ))}
         </div>,
@@ -570,7 +590,7 @@ function SizePresetMenu({
   );
 }
 
-function InfoHint({ title, children }: { title: string; children: ReactNode }) {
+function InfoHint({ title, language, children }: { title: string; language: ResolvedLanguage; children: ReactNode }) {
   const [openState, setOpenState] = useState(false);
   const [position, setPosition] = useState({ left: 12, top: 12, width: 380 });
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -641,7 +661,7 @@ function InfoHint({ title, children }: { title: string; children: ReactNode }) {
         ref={buttonRef}
         type="button"
         className="info-button"
-        aria-label={`${title}の説明`}
+        aria-label={language === "ja" ? `${title}の説明` : `${title} information`}
         aria-expanded={openState}
         aria-controls={popoverId}
         onClick={() => setOpenState((value) => !value)}
@@ -750,32 +770,35 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
   return operation === "optimize" ? srMs + compressionMs : srMs;
 }
 
-function stageLabel(stage?: string): string {
+function stageLabel(stage: string | undefined, language: ResolvedLanguage): string {
+  const ja = language === "ja";
   switch (stage) {
-    case "queued": return "準備中";
-    case "super_resolution": return "AI超解像";
-    case "super_resolution_then_compression": return "AI超解像 → 圧縮";
-    case "compression": return "圧縮 / 変換";
-    case "conversion_only": return "解像度維持 / 変換";
-    case "compression_conversion_only": return "解像度維持 / 圧縮・変換";
-    case "crop_to_size": return "Custom書き出し";
-    case "resize_to_size": return "指定サイズへ縮小";
-    case "vectorize_svg": return "SVGベクター化";
+    case "queued": return ja ? "準備中" : "Preparing";
+    case "super_resolution": return ja ? "AI超解像" : "AI upscaling";
+    case "super_resolution_then_compression": return ja ? "AI超解像 → 圧縮" : "AI upscaling → compression";
+    case "compression": return ja ? "圧縮 / 変換" : "Compression / conversion";
+    case "conversion_only": return ja ? "解像度維持 / 変換" : "Keep resolution / convert";
+    case "compression_conversion_only": return ja ? "解像度維持 / 圧縮・変換" : "Keep resolution / compress & convert";
+    case "crop_to_size": return ja ? "Custom書き出し" : "Custom export";
+    case "resize_to_size": return ja ? "指定サイズへ縮小" : "Resize to target";
+    case "vectorize_svg": return ja ? "SVGベクター化" : "SVG vectorization";
     case "object_edit_sam2_lama": return "Object Edit · SAM2 / LaMa";
-    case "background_removal_feynobg": return "FeyNoBg 背景透過";
-    case "completed": return "完了";
-    case "cancelling": return "キャンセル中";
-    case "cancelled": return "キャンセル済み";
-    case "failed": return "失敗";
-    default: return stage || "処理中";
+    case "background_removal_feynobg": return ja ? "FeyNoBg 背景透過" : "FeyNoBg background removal";
+    case "completed": return ja ? "完了" : "Completed";
+    case "cancelling": return ja ? "キャンセル中" : "Cancelling";
+    case "cancelled": return ja ? "キャンセル済み" : "Cancelled";
+    case "failed": return ja ? "失敗" : "Failed";
+    default: return stage || (ja ? "処理中" : "Processing");
   }
 }
 
-function durationText(ms: number): string {
+function durationText(ms: number, language: ResolvedLanguage): string {
   const seconds = Math.max(0, Math.ceil(ms / 1000));
-  if (seconds < 60) return `${seconds}秒`;
+  if (seconds < 60) return language === "ja" ? `${seconds}秒` : `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  return `${minutes}分${String(seconds % 60).padStart(2, "0")}秒`;
+  return language === "ja"
+    ? `${minutes}分${String(seconds % 60).padStart(2, "0")}秒`
+    : `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 
 function errorText(error: unknown): string {
@@ -1203,7 +1226,7 @@ export default function App() {
   const handlePaths = useCallback(async (paths: string[]) => {
     const valid = paths.filter(isSupportedImage);
     if (valid.length === 0) {
-      setError("対応画像は PNG / JPEG / WebP / AVIF / JXL です。");
+      setError(tr("対応画像は PNG / JPEG / WebP / AVIF / JXL です。", "Supported images are PNG / JPEG / WebP / AVIF / JXL."));
       return;
     }
     if (multiMode) {
@@ -1216,7 +1239,7 @@ export default function App() {
       });
     }
     await loadInput(valid[0]);
-  }, [loadInput, multiMode]);
+  }, [loadInput, multiMode, tr]);
 
   useEffect(() => {
     const promise = getCurrentWebview().onDragDropEvent((event) => {
@@ -1312,22 +1335,22 @@ export default function App() {
   };
 
   const resolveDestination = useCallback(async (filename: string, targetFormat: OutputFormat): Promise<string> => {
-    if (!outputDirectory) throw new Error("保存先フォルダを選択してください。");
+    if (!outputDirectory) throw new Error(tr("保存先フォルダを選択してください。", "Choose a destination folder."));
     return invoke<string>("resolve_output_path_command", {
       directory: outputDirectory,
       filename,
       format: targetFormat,
     });
-  }, [outputDirectory]);
+  }, [outputDirectory, tr]);
 
   const resolveVectorDestination = useCallback(async (filename: string): Promise<string> => {
-    if (!outputDirectory) throw new Error("保存先フォルダを選択してください。");
+    if (!outputDirectory) throw new Error(tr("保存先フォルダを選択してください。", "Choose a destination folder."));
     return invoke<string>("resolve_output_path_command", {
       directory: outputDirectory,
       filename,
       format: "svg",
     });
-  }, [outputDirectory]);
+  }, [outputDirectory, tr]);
 
   const runOne = useCallback(async (path: string, destination: string, targetFormat: OutputFormat): Promise<DesktopJobStatus | null> => {
     const useCompact = operation === "crop" && customTargetBytes != null;
@@ -1404,16 +1427,16 @@ export default function App() {
   const start = async () => {
     if (running || (operation !== "vectorize" && selectedFormats.length === 0)) return;
     if (operation === "remove-bg" && !backgroundRuntime?.installed) {
-      setError("FeyNoBg runtimeを先にインストールしてください。");
+      setError(tr("FeyNoBg runtimeを先にインストールしてください。", "Install the FeyNoBg runtime first."));
       return;
     }
     if (operation === "object-edit") {
       if (!objectRuntime?.installed) {
-        setError("Object Edit runtimeを先にインストールしてください。");
+        setError(tr("Object Edit runtimeを先にインストールしてください。", "Install the Object Edit runtime first."));
         return;
       }
       if (currentObjectSelection.points.length === 0 && !currentObjectSelection.boxPrompt) {
-        setError("画像上をクリックするかBoxで対象物を選択してください。");
+        setError(tr("画像上をクリックするかBoxで対象物を選択してください。", "Select an object by clicking the image or drawing a box."));
         return;
       }
     }
@@ -1549,13 +1572,13 @@ export default function App() {
   }, [displayResult]);
 
   const qualityNote = operation === "vectorize"
-    ? "本物のSVG pathへ変換します。ロゴ・アイコン・線画・フラットイラスト向け。写真や細かな質感主体の画像には非推奨です。"
+    ? tr("本物のSVG pathへ変換します。ロゴ・アイコン・線画・フラットイラスト向け。写真や細かな質感主体の画像には非推奨です。", "Converts raster input into real SVG paths. Best for logos, icons, line art, and flat illustrations; not recommended for photos or texture-heavy images.")
     : operation === "remove-bg"
-      ? "FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。"
+      ? tr("FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。", "FeyNoBg estimates a foreground alpha matte and exports transparency while preserving the original pixel dimensions. PNG and WebP are supported.")
     : operation === "object-edit"
-      ? "SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。"
+      ? tr("SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。", "Select any object with SAM 2.1 Base+, then adjust the mask with expand/contract and feathering. Transparency uses the SAM mask; natural removal uses LaMa to reconstruct the background.")
     : operation === "crop" && customTargetBytes != null
-      ? `最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`
+      ? tr(`最大 ${bytes(customTargetBytes)} を優先して品質を自動調整します。PNGはExactで上限を満たせない場合、曖昧に劣化させず失敗として明示します。`, `Automatically adjusts quality to prioritize the ${bytes(customTargetBytes)} maximum. If exact PNG output cannot meet the limit, Agent-2D fails explicitly instead of silently degrading it.`)
       : selectedFormats.map(formatQualityText).join(" · ");
 
   const elapsedMs = jobTiming ? Math.max(0, clock - jobTiming.startedAt) : 0;
@@ -1571,9 +1594,9 @@ export default function App() {
       ? Math.max(job?.fraction ?? 0, estimatedFraction)
       : job?.fraction ?? 0;
   const etaText = job?.state === "completed" && result
-    ? `所要 ${durationText(result.elapsedMs)}`
+    ? (uiLanguage === "ja" ? `所要 ${durationText(result.elapsedMs, uiLanguage)}` : `Elapsed ${durationText(result.elapsedMs, uiLanguage)}`)
     : backendRunning && jobTiming
-      ? `残り 約${durationText(Math.max(0, adaptiveTotalMs - elapsedMs))}`
+      ? (uiLanguage === "ja" ? `残り 約${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)}` : `About ${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)} remaining`)
       : "";
   const visibleOutputName = outputResults.length > 0
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
@@ -1987,7 +2010,7 @@ export default function App() {
 
       {runtimeChecked && !capabilities && (
         <div className="runtime-alert">
-          <span>Real-ESRGAN runtime未導入</span>
+          <span>{tr("Real-ESRGAN runtime未導入", "Real-ESRGAN runtime is not installed")}</span>
           <button className="runtime-install" onClick={installManagedRuntime} disabled={installingRuntime}>
             {installingRuntime ? "Installing…" : "Install runtime"}
           </button>
@@ -1997,7 +2020,7 @@ export default function App() {
       <div className="app-navigation">
         <section className="mode-tabs" aria-label="Operation">
           {OPERATION_ORDER.map((item, index) => (
-            <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]])} · ${modeLabel(item)}`}>
+            <button key={item} className={operation === item ? "active" : ""} onClick={() => setOperation(item)} disabled={running} title={`${shortcutDisplay(uiPreferences.shortcuts[OPERATION_SHORTCUT_ACTIONS[index]], uiLanguage)} · ${modeLabel(item)}`}>
               {modeLabel(item)}
               <small>{operationSubtitle(item, uiLanguage)}</small>
             </button>
@@ -2034,7 +2057,7 @@ export default function App() {
                       <span className="queue-name">{basename(entry.path)}</span>
                       <span className={`queue-status ${entry.state}`}>{entry.state}</span>
                     </button>
-                    <button className="queue-remove" onClick={() => removeQueueEntry(entry.path)} disabled={running} aria-label={`${basename(entry.path)}をキューから削除`}>×</button>
+                    <button className="queue-remove" onClick={() => removeQueueEntry(entry.path)} disabled={running} aria-label={tr(`${basename(entry.path)}をキューから削除`, `Remove ${basename(entry.path)} from queue`)}>×</button>
                   </div>
                 ))}
               </div>
@@ -2055,11 +2078,11 @@ export default function App() {
               <div className="field-row two size-fields">
                 <div className="field-control">
                   <span>Width · px</span>
-                  <NumberStepper value={targetWidth} onChange={(value) => setTargetWidth(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel="出力幅" />
+                  <NumberStepper value={targetWidth} onChange={(value) => setTargetWidth(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel={tr("出力幅", "Output width")} language={uiLanguage} />
                 </div>
                 <div className="field-control">
                   <span>Height · px</span>
-                  <NumberStepper value={targetHeight} onChange={(value) => setTargetHeight(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel="出力高さ" />
+                  <NumberStepper value={targetHeight} onChange={(value) => setTargetHeight(Math.round(value))} min={1} max={32768} step={1} disabled={running} ariaLabel={tr("出力高さ", "Output height")} language={uiLanguage} />
                 </div>
               </div>
               <div className="source-size-tools">
@@ -2069,10 +2092,10 @@ export default function App() {
                   onClick={() => applySourceSizeMultiplier(1)}
                   disabled={running || !inputInfo}
                 >
-                  元画像と同じ {inputInfo ? `${inputInfo.width}×${inputInfo.height}` : ""}
+                  {tr("元画像と同じ", "Match source")} {inputInfo ? `${inputInfo.width}×${inputInfo.height}` : ""}
                 </button>
-                <div className="source-multiplier-tools" aria-label="元画像サイズ倍率">
-                  <span>元画像倍率</span>
+                <div className="source-multiplier-tools" aria-label={tr("元画像サイズ倍率", "Source-size multiplier")}>
+                  <span>{tr("元画像倍率", "Source scale")}</span>
                   {[1, 2, 4].map((multiplier) => (
                     <button
                       key={multiplier}
@@ -2096,12 +2119,13 @@ export default function App() {
                       max={Number(maxSourceSizeMultiplier.toFixed(2))}
                       step={0.1}
                       disabled={running || !inputInfo}
-                      ariaLabel="元画像サイズ倍率"
+                      ariaLabel={tr("元画像サイズ倍率", "Source-size multiplier")}
                       suffix="×"
+                      language={uiLanguage}
                       onEnter={() => applySourceSizeMultiplier(sourceSizeMultiplier)}
                     />
                   </div>
-                  <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>適用</button>
+                  <button type="button" onClick={() => applySourceSizeMultiplier(sourceSizeMultiplier)} disabled={running || !inputInfo}>{tr("適用", "Apply")}</button>
                 </div>
                 {inputInfo && (
                   <small className="source-size-preview">
@@ -2114,23 +2138,24 @@ export default function App() {
                 <SizePresetMenu
                   disabled={running}
                   presets={savedSizePresets}
+                  language={uiLanguage}
                   onApply={setCropPreset}
                   onDelete={deleteSavedPreset}
                 />
               </div>
               <div className="preset-save-row">
-                <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder={`名前（未入力なら ${targetWidth}×${targetHeight}）`} disabled={running} />
-                <button type="button" onClick={saveCurrentPreset} disabled={running}>サイズ保存</button>
+                <input value={presetName} onChange={(event) => setPresetName(event.target.value)} placeholder={tr(`名前（未入力なら ${targetWidth}×${targetHeight}）`, `Name (defaults to ${targetWidth}×${targetHeight})`)} disabled={running} />
+                <button type="button" onClick={saveCurrentPreset} disabled={running}>{tr("サイズ保存", "Save size")}</button>
               </div>
 
               <div className={`size-cap-card ${sizeCapEnabled ? "active" : ""}`}>
                 <label className="size-cap-toggle">
                   <input type="checkbox" checked={sizeCapEnabled} onChange={(event) => setSizeCapEnabled(event.target.checked)} disabled={running} />
-                  <span>最大ファイルサイズを指定</span>
+                  <span>{tr("最大ファイルサイズを指定", "Set maximum file size")}</span>
                 </label>
                 {sizeCapEnabled && (
                   <div className="size-cap-fields">
-                    <NumberStepper value={sizeCapValue} onChange={setSizeCapValue} min={0.01} step={0.05} disabled={running} ariaLabel="最大ファイルサイズ" />
+                    <NumberStepper value={sizeCapValue} onChange={setSizeCapValue} min={0.01} step={0.05} disabled={running} ariaLabel={tr("最大ファイルサイズ", "Maximum file size")} language={uiLanguage} />
                     <select value={sizeCapUnit} onChange={(event) => setSizeCapUnit(event.target.value as "KB" | "MB")} disabled={running}>
                       <option value="KB">KB</option>
                       <option value="MB">MB</option>
@@ -2138,7 +2163,7 @@ export default function App() {
                     <strong>≤ {bytes(customTargetBytes)}</strong>
                   </div>
                 )}
-                <p>サイズ上限を優先するため、JPG / WebP / AVIF / JXL は必要に応じて品質を下げます。PNGはExactで達成不能なら明示的に停止します。</p>
+                <p>{tr("サイズ上限を優先するため、JPG / WebP / AVIF / JXL は必要に応じて品質を下げます。PNGはExactで達成不能なら明示的に停止します。", "To prioritize the size limit, JPG / WebP / AVIF / JXL may reduce quality as needed. PNG stops with an explicit error if Exact output cannot meet the limit.")}</p>
               </div>
 
               <div className="crop-controls">
@@ -2149,7 +2174,7 @@ export default function App() {
                   <button type="button" onClick={() => setCropZoom((value) => clamp(value + 0.1, 1, 6))} disabled={running}>＋</button>
                 </div>
                 <div className="nudge-area">
-                  <span>位置</span>
+                  <span>{tr("位置", "Position")}</span>
                   <div className="nudge-pad">
                     <button type="button" className="up" onClick={() => adjustCrop(0, -0.04)} disabled={running}>↑</button>
                     <button type="button" className="left" onClick={() => adjustCrop(-0.04, 0)} disabled={running}>←</button>
@@ -2159,13 +2184,13 @@ export default function App() {
                   </div>
                 </div>
                 <div className="crop-reset-row">
-                  <button type="button" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>位置Reset</button>
-                  <button type="button" onClick={() => setCropZoom(1)} disabled={running}>Zoom Reset</button>
-                  <button type="button" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }} disabled={running}>中央Fit</button>
+                  <button type="button" onClick={() => { setCropX(0); setCropY(0); }} disabled={running}>{tr("位置Reset", "Reset position")}</button>
+                  <button type="button" onClick={() => setCropZoom(1)} disabled={running}>{tr("Zoom Reset", "Reset zoom")}</button>
+                  <button type="button" onClick={() => { setCropZoom(1); setCropX(0); setCropY(0); }} disabled={running}>{tr("中央Fit", "Center fit")}</button>
                 </div>
                 <div className="transform-note compact">
-                  <span>プレビューをドラッグ / ホイール / 矢印キーで調整。Shift+矢印は大きく、Option+矢印は細かく移動。</span>
-                  {inputInfo && (inputInfo.width < targetWidth || inputInfo.height < targetHeight) && <span className="size-warning">指定サイズが元画像より大きいため、出力ではLanczos補間が入る場合があります。</span>}
+                  <span>{tr("プレビューをドラッグ / ホイール / 矢印キーで調整。Shift+矢印は大きく、Option+矢印は細かく移動。", "Adjust the preview by dragging, using the wheel, or the arrow keys. Shift+Arrow moves farther; Option+Arrow moves precisely.")}</span>
+                  {inputInfo && (inputInfo.width < targetWidth || inputInfo.height < targetHeight) && <span className="size-warning">{tr("指定サイズが元画像より大きいため、出力ではLanczos補間が入る場合があります。", "The target size is larger than the source, so Lanczos interpolation may be used in the output.")}</span>}
                 </div>
               </div>
             </>
@@ -2184,7 +2209,7 @@ export default function App() {
                     {!backgroundRuntimeChecked ? "Checking…" : backgroundRuntime?.installed ? "READY" : "NOT INSTALLED"}
                   </span>
                 </div>
-                <p>人物・商品・動物・細い輪郭までAIで前景を推定し、透明alphaとして出力します。元画像の縦横サイズは維持します。</p>
+                <p>{tr("人物・商品・動物・細い輪郭までAIで前景を推定し、透明alphaとして出力します。元画像の縦横サイズは維持します。", "AI estimates the foreground for people, products, animals, and fine edges, then exports transparent alpha while preserving the source dimensions.")}</p>
                 {backgroundRuntime?.installed ? (
                   <div className="background-runtime-meta">
                     <span>{backgroundRuntime.modelId}</span>
@@ -2192,7 +2217,7 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="background-runtime-install">
-                    <span>初回のみ約1GBのモデルとPyTorch runtimeをApplication Supportへ取得します。通常処理は完全ローカルです。</span>
+                    <span>{tr("初回のみ約1GBのモデルとPyTorch runtimeをApplication Supportへ取得します。通常処理は完全ローカルです。", "On first use, Agent-2D downloads about 1 GB of model data and the PyTorch runtime into Application Support. Normal processing is fully local.")}</span>
                     <button type="button" onClick={installBackgroundRuntime} disabled={running || installingBackgroundRuntime}>
                       {installingBackgroundRuntime ? "Installing FeyNoBg…" : "Install FeyNoBg"}
                     </button>
@@ -2212,12 +2237,12 @@ export default function App() {
                 </div>
                 {objectRuntime?.installed ? (
                   <details className="object-runtime-details">
-                    <summary>技術情報</summary>
+                    <summary>{tr("技術情報", "Technical details")}</summary>
                     <div className="background-runtime-meta"><span>{objectRuntime.samModelId}</span><span>LaMa · shared PyTorch runtime</span></div>
                   </details>
                 ) : (
                   <div className="background-runtime-install">
-                    <span>初回のみSAM 2.1 Base+とBig-LaMaを取得。既存FeyNoBgのPyTorch runtimeを再利用します。</span>
+                    <span>{tr("初回のみSAM 2.1 Base+とBig-LaMaを取得。既存FeyNoBgのPyTorch runtimeを再利用します。", "On first use, Agent-2D downloads SAM 2.1 Base+ and Big-LaMa, reusing the existing FeyNoBg PyTorch runtime.")}</span>
                     <button type="button" onClick={installObjectRuntime} disabled={running || installingObjectRuntime}>{installingObjectRuntime ? "Installing…" : "Install Object Edit"}</button>
                   </div>
                 )}
@@ -2225,30 +2250,30 @@ export default function App() {
               <div className="object-control-card">
                 <div className="object-quick-guide">
                   <strong>{inputPath ? copy.objectSelect : copy.objectLoadFirst}</strong>
-                  <span>{inputPath ? `${shortcutDisplay(uiPreferences.shortcuts.objectUndo)}で戻す · ⌥クリックで除外 · ⇧ドラッグで範囲` : copy.loadHint}</span>
+                  <span>{inputPath ? tr(`${shortcutDisplay(uiPreferences.shortcuts.objectUndo, uiLanguage)}で戻す · ⌥クリックで除外 · ⇧ドラッグで範囲`, `${shortcutDisplay(uiPreferences.shortcuts.objectUndo, uiLanguage)} undo · Option-click exclude · Shift-drag box`) : copy.loadHint}</span>
                 </div>
                 {inputPath && <>
                 <div className="object-mask-adjust">
-                  <div><span>Mask範囲</span><strong>{objectExpand > 0 ? `+${objectExpand}` : objectExpand}px</strong></div>
+                  <div><span>{tr("Mask範囲", "Mask range")}</span><strong>{objectExpand > 0 ? `+${objectExpand}` : objectExpand}px</strong></div>
                   <div className="crop-zoom-row">
                     <button type="button" onClick={() => adjustObjectExpand(-2)} disabled={running}>−</button>
                     <input type="range" min={-32} max={32} step={1} value={objectExpand} onPointerDown={pushObjectUndo} onChange={(event) => setObjectExpand(Number(event.target.value))} disabled={running} />
                     <button type="button" onClick={() => adjustObjectExpand(2)} disabled={running}>＋</button>
                   </div>
                 </div>
-                <label className="object-feather-field"><span>境界ぼかし <b>{objectFeather.toFixed(1)}px</b></span><input type="range" min={0} max={16} step={0.5} value={objectFeather} onPointerDown={pushObjectUndo} onChange={(event) => setObjectFeather(Number(event.target.value))} disabled={running} /></label>
+                <label className="object-feather-field"><span>{tr("境界ぼかし", "Edge feather")} <b>{objectFeather.toFixed(1)}px</b></span><input type="range" min={0} max={16} step={0.5} value={objectFeather} onPointerDown={pushObjectUndo} onChange={(event) => setObjectFeather(Number(event.target.value))} disabled={running} /></label>
                 <div className="object-action-grid">
-                  <button type="button" className={objectAction === "keep-selected" ? "active" : ""} onClick={() => setObjectAction("keep-selected")} disabled={running}>選択だけ残す<small>外側を透明化</small></button>
-                  <button type="button" className={objectAction === "make-selected-transparent" ? "active" : ""} onClick={() => setObjectAction("make-selected-transparent")} disabled={running}>選択だけ透明化<small>対象物を抜く</small></button>
-                  <button type="button" className={objectAction === "remove-and-fill" ? "active" : ""} onClick={() => setObjectAction("remove-and-fill")} disabled={running}>自然に削除<small>LaMaで背景復元</small></button>
+                  <button type="button" className={objectAction === "keep-selected" ? "active" : ""} onClick={() => setObjectAction("keep-selected")} disabled={running}>{tr("選択だけ残す", "Keep selection")}<small>{tr("外側を透明化", "Make outside transparent")}</small></button>
+                  <button type="button" className={objectAction === "make-selected-transparent" ? "active" : ""} onClick={() => setObjectAction("make-selected-transparent")} disabled={running}>{tr("選択だけ透明化", "Make selection transparent")}<small>{tr("対象物を抜く", "Cut out the object")}</small></button>
+                  <button type="button" className={objectAction === "remove-and-fill" ? "active" : ""} onClick={() => setObjectAction("remove-and-fill")} disabled={running}>{tr("自然に削除", "Remove naturally")}<small>{tr("LaMaで背景復元", "Reconstruct with LaMa")}</small></button>
                 </div>
                 <div className="object-selection-meta">
                   <span>＋ {objectPoints.filter((point) => point.label === "include").length}</span>
                   <span>− {objectPoints.filter((point) => point.label === "exclude").length}</span>
                   <span>Box {objectBox ? "1" : "0"}</span>
                   <span title={objectMaskScore != null ? `SAM score ${objectMaskScore.toFixed(3)}` : undefined}>{objectMaskLoading ? tr("AI更新中… 続けてクリック可", "AI updating… you can keep clicking") : objectMaskPreview ? copy.selected : copy.selectTarget}</span>
-                  <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す ⌘Z</button>
-                  <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>リセット</button>
+                  <button type="button" className="undo" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ {tr("戻す", "Undo")} ⌘Z</button>
+                  <button type="button" onClick={clearObjectSelection} disabled={running || (objectPoints.length === 0 && !objectBox)}>{tr("リセット", "Reset")}</button>
                 </div>
                 </>}
               </div>
@@ -2272,7 +2297,7 @@ export default function App() {
                       }}
                       disabled={running}
                     >
-                      <option value="illustration">Illustration · 推奨</option>
+                      <option value="illustration">Illustration · {tr("推奨", "Recommended")}</option>
                       <option value="logo">Logo / Icon</option>
                       <option value="line-art">Line Art</option>
                     </select>
@@ -2280,23 +2305,23 @@ export default function App() {
                   <label>
                     <span>Detail</span>
                     <select value={vectorDetail} onChange={(event) => setVectorDetail(event.target.value as VectorDetail)} disabled={running}>
-                      <option value="clean">Clean · 少ないpath</option>
-                      <option value="balanced">Balanced · 推奨</option>
-                      <option value="detailed">Detailed · 細部優先</option>
+                      <option value="clean">Clean · {tr("少ないpath", "fewer paths")}</option>
+                      <option value="balanced">Balanced · {tr("推奨", "Recommended")}</option>
+                      <option value="detailed">Detailed · {tr("細部優先", "more detail")}</option>
                     </select>
                   </label>
                 </div>
                 {vectorPreset !== "line-art" && (
                   <div className="vector-color-field">
-                    <span>最大色数</span>
-                    <NumberStepper value={vectorMaxColors} onChange={(value) => setVectorMaxColors(Math.round(value))} min={2} max={64} step={1} disabled={running} ariaLabel="最大色数" />
-                    <small>少ないほどロゴ的で軽量。多いほど元画像の色を残します。</small>
+                    <span>{tr("最大色数", "Maximum colors")}</span>
+                    <NumberStepper value={vectorMaxColors} onChange={(value) => setVectorMaxColors(Math.round(value))} min={2} max={64} step={1} disabled={running} ariaLabel={tr("最大色数", "Maximum colors")} language={uiLanguage} />
+                    <small>{tr("少ないほどロゴ的で軽量。多いほど元画像の色を残します。", "Fewer colors produce a lighter, logo-like result; more colors preserve more of the source palette.")}</small>
                   </div>
                 )}
                 <div className="vectorize-note">
                   <strong>Raster → real SVG paths</strong>
-                  <span>ロゴ・アイコン・線画・フラットイラスト向け。埋め込み画像ではなくベクターpathを生成します。</span>
-                  <span className="vectorize-warning">写真・複雑な自然画像・微細な質感が主役の素材には非推奨です。</span>
+                  <span>{tr("ロゴ・アイコン・線画・フラットイラスト向け。埋め込み画像ではなくベクターpathを生成します。", "Designed for logos, icons, line art, and flat illustrations. It generates vector paths rather than embedding the raster image.")}</span>
+                  <span className="vectorize-warning">{tr("写真・複雑な自然画像・微細な質感が主役の素材には非推奨です。", "Not recommended for photos, complex natural imagery, or assets dominated by fine texture.")}</span>
                 </div>
               </div>
             </>
@@ -2309,52 +2334,52 @@ export default function App() {
                 <div className="field-control">
                   <div className="field-title"><span>Scale</span></div>
                   <select value={scale} onChange={(event) => setScale(Number(event.target.value) as 1 | 2 | 4)} disabled={running}>
-                    <option value={1}>1× · 解像度維持</option>
-                    <option value={2}>2× · 推奨確認</option>
-                    <option value={4}>4× · 最大拡大</option>
+                    <option value={1}>1× · {tr("解像度維持", "Keep resolution")}</option>
+                    <option value={2}>2× · {tr("推奨確認", "Recommended check")}</option>
+                    <option value={4}>4× · {tr("最大拡大", "Maximum upscale")}</option>
                   </select>
                 </div>
                 <div className="field-control">
                   <div className="field-title">
                     <span>Mode</span>
-                    <InfoHint title="Mode · 処理方針の選び方">
-                      <p className="info-lead"><b>Modeは「処理の方針・優先順位」</b>です。Modelそのものではなく、Auto route時の選び方と仕上がり意図を指定します。</p>
-                      <p>{selectedModeHelp.body}</p>
+                    <InfoHint title={tr("Mode · 処理方針の選び方", "Mode · Processing strategy")} language={uiLanguage}>
+                      <p className="info-lead"><b>{tr("Modeは「処理の方針・優先順位」", "Mode defines the processing strategy and priority")}</b>{tr("です。Modelそのものではなく、Auto route時の選び方と仕上がり意図を指定します。", ". It does not change the model itself; it guides Auto route and the intended output character.")}</p>
+                      <p>{tr(selectedModeHelp.bodyJa, selectedModeHelp.bodyEn)}</p>
                       <ul className="info-list">
-                        <li><b>Fidelity</b><span>原画像優先。写真、文字、滑らかなCGで余計な再生成を抑えたい。</span></li>
-                        <li><b>Balanced · 推奨</b><span>自然さとディテールの中間。迷ったらこれ。</span></li>
-                        <li><b>Perceptual</b><span>見た目の細部感寄り。柔らかい素材では効くが、再生成感も増えやすい。</span></li>
+                        <li><b>Fidelity</b><span>{tr("原画像優先。写真、文字、滑らかなCGで余計な再生成を抑えたい。", "Prioritizes the source. Useful for photos, text, and smooth CG when you want to suppress unnecessary regeneration.")}</span></li>
+                        <li><b>Balanced · {tr("推奨", "Recommended")}</b><span>{tr("自然さとディテールの中間。迷ったらこれ。", "Balances naturalness and detail. Start here when unsure.")}</span></li>
+                        <li><b>Perceptual</b><span>{tr("見た目の細部感寄り。柔らかい素材では効くが、再生成感も増えやすい。", "Favors perceived fine detail. It can help soft material, but can also increase the sense of regenerated texture.")}</span></li>
                       </ul>
-                      <div className="info-callout"><b>用途例</b><span>写真 → Fidelity / Balanced</span><span>宇宙・近未来CG / 発光ライン → FidelityまたはBalanced</span><span>アニメ絵 → Balanced + anime系Model</span></div>
-                      <em>Speed専用Modeはありません。速度差は主にScaleとModelで決まり、軽さ重視なら animevideov3 が候補です。</em>
+                      <div className="info-callout"><b>{tr("用途例", "Examples")}</b><span>{tr("写真 → Fidelity / Balanced", "Photos → Fidelity / Balanced")}</span><span>{tr("宇宙・近未来CG / 発光ライン → FidelityまたはBalanced", "Space / sci-fi CG / glowing lines → Fidelity or Balanced")}</span><span>{tr("アニメ絵 → Balanced + anime系Model", "Anime artwork → Balanced + an anime Model")}</span></div>
+                      <em>{tr("Speed専用Modeはありません。速度差は主にScaleとModelで決まり、軽さ重視なら animevideov3 が候補です。", "There is no speed-only Mode. Runtime is driven mainly by Scale and Model; animevideov3 is an option when lower processing cost matters.")}</em>
                     </InfoHint>
                   </div>
                   <select value={srMode} onChange={(event) => setSrMode(event.target.value as SrMode)} disabled={running || scale === 1}>
                     <option value="fidelity">Fidelity</option>
-                    <option value="balanced">Balanced · 推奨</option>
+                    <option value="balanced">Balanced · {tr("推奨", "Recommended")}</option>
                     <option value="perceptual">Perceptual</option>
                   </select>
                 </div>
               </div>
-              {scale === 1 && <div className="scale-note">1×ではSR child processを起動せず、寸法を完全維持して変換 / 圧縮のみ行います。</div>}
+              {scale === 1 && <div className="scale-note">{tr("1×ではSR child processを起動せず、寸法を完全維持して変換 / 圧縮のみ行います。", "At 1×, Agent-2D skips the SR child process and only converts or compresses while preserving dimensions exactly.")}</div>}
               <div className="field-control field sr-model-field">
                 <div className="field-title">
                   <span>Model</span>
-                  <InfoHint title="Model · 学習済みSRモデルの選び方">
-                    <p className="info-lead"><b>Modelは「学習済みSRモデルそのもの」</b>です。Modeよりも、画像ジャンルに対する得意・不得意へ直接効きます。</p>
-                    <p>{selectedModelHelp.body}</p>
+                  <InfoHint title={tr("Model · 学習済みSRモデルの選び方", "Model · Choosing a trained SR model")} language={uiLanguage}>
+                    <p className="info-lead"><b>{tr("Modelは「学習済みSRモデルそのもの」", "Model is the trained SR network itself")}</b>{tr("です。Modeよりも、画像ジャンルに対する得意・不得意へ直接効きます。", ". It affects strengths and weaknesses for image genres more directly than Mode.")}</p>
+                    <p>{tr(selectedModelHelp.bodyJa, selectedModelHelp.bodyEn)}</p>
                     <ul className="info-list">
-                      <li><b>Auto route · 推奨</b><span>Modeと内蔵規則から保守的に選択。一般用途向け。特殊CGでは手動固定の方が読みやすい結果になる場合があります。</span></li>
-                      <li><b>realesrgan-x4plus</b><span>写真・一般画像・実写寄りCG。宇宙、霧、発光リム、滑らかなラインはまずこれ。</span></li>
-                      <li><b>realesrgan-x4plus-anime</b><span>アニメ、イラスト、線画。写真や実写寄りCGには不向き。</span></li>
-                      <li><b>realesr-animevideov3</b><span>アニメ映像寄りの軽量モデル。速度優先や連続フレーム向け。</span></li>
+                      <li><b>Auto route · {tr("推奨", "Recommended")}</b><span>{tr("Modeと内蔵規則から保守的に選択。一般用途向け。特殊CGでは手動固定の方が読みやすい結果になる場合があります。", "Chooses conservatively from Mode and built-in rules. Good for general use; unusual CG may be more predictable with a manually pinned model.")}</span></li>
+                      <li><b>realesrgan-x4plus</b><span>{tr("写真・一般画像・実写寄りCG。宇宙、霧、発光リム、滑らかなラインはまずこれ。", "Photos, general images, and realistic CG. Start here for space scenes, fog, glowing rims, and smooth lines.")}</span></li>
+                      <li><b>realesrgan-x4plus-anime</b><span>{tr("アニメ、イラスト、線画。写真や実写寄りCGには不向き。", "Anime, illustrations, and line art. Not intended for photos or realistic CG.")}</span></li>
+                      <li><b>realesr-animevideov3</b><span>{tr("アニメ映像寄りの軽量モデル。速度優先や連続フレーム向け。", "A lighter anime-video model for speed-oriented use and sequential frames.")}</span></li>
                     </ul>
-                    <div className="info-callout accent"><b>宇宙 / 近未来CG</b><span>realesrgan-x4plus + Fidelity / Balanced</span><span>まず2×で確認し、必要な場合だけ4×。微細な星・霧・発光線は4×ほど再生成感が増えやすい。</span></div>
-                    <em>Auto routeで質感が抽象化する場合は、宇宙CGでは x4plus を手動固定してください。</em>
+                    <div className="info-callout accent"><b>{tr("宇宙 / 近未来CG", "Space / sci-fi CG")}</b><span>realesrgan-x4plus + Fidelity / Balanced</span><span>{tr("まず2×で確認し、必要な場合だけ4×。微細な星・霧・発光線は4×ほど再生成感が増えやすい。", "Check 2× first and use 4× only when needed. Tiny stars, fog, and glowing lines are more likely to look regenerated at 4×.")}</span></div>
+                    <em>{tr("Auto routeで質感が抽象化する場合は、宇宙CGでは x4plus を手動固定してください。", "If Auto route abstracts the texture too much, manually pin x4plus for space CG.")}</em>
                   </InfoHint>
                 </div>
                 <select value={modelId} onChange={(event) => setModelId(event.target.value)} disabled={running || scale === 1}>
-                  <option value="">Auto route · 推奨</option>
+                  <option value="">Auto route · {tr("推奨", "Recommended")}</option>
                   {capabilities?.models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}
                 </select>
               </div>
@@ -2364,7 +2389,7 @@ export default function App() {
           {operation !== "vectorize" && (
             <>
               <div className="section-label">OUTPUT FORMATS</div>
-              <div className={`format-selector ${operation === "remove-bg" || operation === "object-edit" ? "alpha-only" : ""}`} role="group" aria-label="出力形式を複数選択">
+              <div className={`format-selector ${operation === "remove-bg" || operation === "object-edit" ? "alpha-only" : ""}`} role="group" aria-label={tr("出力形式を複数選択", "Select output formats")}>
                 {(operation === "remove-bg"
                   ? BACKGROUND_OUTPUT_FORMATS
                   : operation === "object-edit"
@@ -2401,7 +2426,7 @@ export default function App() {
           <label className="field output-name-field">
             <span>{copy.fileName}</span>
             <input
-              value={multiMode ? "入力名-agent2d-*（自動）" : outputName}
+              value={multiMode ? tr("入力名-agent2d-*（自動）", "input-name-agent2d-* (automatic)") : outputName}
               onChange={(event) => { setOutputName(event.target.value); setOutputPath(""); }}
               placeholder="image-agent2d-optimized"
               disabled={running || multiMode}
@@ -2409,9 +2434,9 @@ export default function App() {
           </label>
           <div className="output-preview-line">
             <span>{copy.finalName}</span>
-            <code>{multiMode ? `各入力名 → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…` : visibleOutputName}</code>
+            <code>{multiMode ? tr(`各入力名 → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / 衝突時 _02, _03…`, `Each input name → ${operation === "vectorize" ? "SVG" : operation === "remove-bg" ? selectedFormats.filter((item) => item === "png" || item === "webp").map((item) => item.toUpperCase()).join(" + ") : selectedFormats.map((item) => item.toUpperCase()).join(" + ")} / conflicts use _02, _03…`) : visibleOutputName}</code>
           </div>
-          {outputPath && <div className="resolved-output" title={outputPath}>保存先: {outputPath}</div>}
+          {outputPath && <div className="resolved-output" title={outputPath}>{tr("保存先", "Destination")}: {outputPath}</div>}
           {outputResults.length > 1 && (
             <div className="output-results-list">
               {outputResults.map((entry) => <span key={entry.outputPath}>{basename(entry.outputPath)} · {bytes(entry.outputBytes)}</span>)}
@@ -2421,11 +2446,11 @@ export default function App() {
           {job && (
             <div className={`job-card ${job.state}`}>
               <div className="job-line">
-                <span>{batchRunning ? `batch · ${stageLabel(job.stage)}` : stageLabel(job.stage)}</span>
+                <span>{batchRunning ? `batch · ${stageLabel(job.stage, uiLanguage)}` : stageLabel(job.stage, uiLanguage)}</span>
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || "時間を計測中"}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || tr("時間を計測中", "Measuring time")}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : scale === 1 && (operation === "enhance" || operation === "optimize") ? `SR skip · ${selectedFormats.length} format` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
@@ -2491,14 +2516,14 @@ export default function App() {
               </div>
               <div className="crop-helpbar">
                 <span>Drag · Wheel · ↑↓←→</span>
-                <span>Shift = 大きく / Option = 細かく</span>
-                <span>最小Zoomは空白が出ないCover</span>
+                <span>{tr("Shift = 大きく / Option = 細かく", "Shift = larger / Option = precise")}</span>
+                <span>{tr("最小Zoomは空白が出ないCover", "Minimum zoom uses Cover to avoid empty areas")}</span>
               </div>
             </figure>
           ) : operation === "object-edit" ? (
             <figure className="object-edit-card">
               <figcaption>
-                <div><span className="before-label">{inputPreview ? "対象を選択" : "PREVIEW"}</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
+                <div><span className="before-label">{inputPreview ? tr("対象を選択", "Select object") : "PREVIEW"}</span>{inputInfo && <b>{inputInfo.width}×{inputInfo.height}</b>}</div>
                 <div className="object-view-controls">
                   <button type="button" onClick={() => setObjectZoom((value) => clamp(value - 0.2, 1, 6))} disabled={running || !inputPreview}>−</button>
                   <strong>{objectZoom.toFixed(1)}×</strong>
@@ -2509,12 +2534,12 @@ export default function App() {
               </figcaption>
               {inputPreview && (
                 <div className="object-canvas-toolbar object-canvas-toolbar-docked" role="group" aria-label="Object selection tool">
-                  <button type="button" title="対象に含める。通常クリックと同じです" className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ 選択</button>
-                  <button type="button" title="対象から除外。Option+クリックでも使えます" className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− 除外</button>
-                  <button type="button" title="矩形で大まかに指定。Shift+ドラッグでも使えます" className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ 範囲</button>
-                  <button type="button" title="ドラッグで表示位置を移動。マウス中ボタンでも移動できます" className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>移動</button>
+                  <button type="button" title={tr("対象に含める。通常クリックと同じです", "Include in selection. Same as a normal click.")} className={objectTool === "include" ? "active include" : ""} onClick={() => setObjectTool("include")} disabled={running}>＋ {tr("選択", "Include")}</button>
+                  <button type="button" title={tr("対象から除外。Option+クリックでも使えます", "Exclude from selection. Option-click does the same.")} className={objectTool === "exclude" ? "active exclude" : ""} onClick={() => setObjectTool("exclude")} disabled={running}>− {tr("除外", "Exclude")}</button>
+                  <button type="button" title={tr("矩形で大まかに指定。Shift+ドラッグでも使えます", "Select a rough rectangle. Shift-drag does the same.")} className={objectTool === "box" ? "active" : ""} onClick={() => setObjectTool("box")} disabled={running}>□ {tr("範囲", "Box")}</button>
+                  <button type="button" title={tr("ドラッグで表示位置を移動。マウス中ボタンでも移動できます", "Drag to pan the view. Middle-button drag also works.")} className={objectTool === "pan" ? "active" : ""} onClick={() => setObjectTool("pan")} disabled={running}>{tr("移動", "Pan")}</button>
                   <i aria-hidden="true" />
-                  <button type="button" className="utility" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ 戻す</button>
+                  <button type="button" className="utility" onClick={undoObjectSelection} disabled={running || objectUndoDepth === 0}>↶ {tr("戻す", "Undo")}</button>
                 </div>
               )}
               <div
@@ -2569,9 +2594,9 @@ export default function App() {
               </div>
               {inputPreview && (
                 <div className="object-helpbar">
-                  <span>クリック 選択 · ⌥ 除外 · ⇧ドラッグ 範囲 · {shortcutDisplay(uiPreferences.shortcuts.objectUndo)} 戻す</span>
-                  <span>Wheel Zoom · 中ドラッグ 移動</span>
-                  {displayOutputPreview && <span className="object-result-ready">処理結果あり · {objectAction === "remove-and-fill" ? "背景補完" : "透明化"}</span>}
+                  <span>{tr(`クリック 選択 · ⌥ 除外 · ⇧ドラッグ 範囲 · ${shortcutDisplay(uiPreferences.shortcuts.objectUndo, uiLanguage)} 戻す`, `Click include · ⌥ exclude · ⇧-drag box · ${shortcutDisplay(uiPreferences.shortcuts.objectUndo, uiLanguage)} undo`)}</span>
+                  <span>{tr("Wheel Zoom · 中ドラッグ 移動", "Wheel zoom · middle-drag pan")}</span>
+                  {displayOutputPreview && <span className="object-result-ready">{tr("処理結果あり", "Result ready")} · {objectAction === "remove-and-fill" ? tr("背景補完", "background filled") : tr("透明化", "transparency")}</span>}
                 </div>
               )}
               {displayOutputPreview && (
@@ -2589,7 +2614,7 @@ export default function App() {
               <div><span className="after-label">AFTER</span>{displayResult && <b>{displayResult.outputWidth}×{displayResult.outputHeight}</b>}</div>
             </figcaption>
             {comparisonOutputs.length > 1 && (
-              <div className="compare-format-tabs" role="tablist" aria-label="Before / After 出力形式">
+              <div className="compare-format-tabs" role="tablist" aria-label={tr("Before / After 出力形式", "Before / After output format")}>
                 {comparisonOutputs.map((entry) => (
                   <button
                     key={entry.format}
@@ -2631,7 +2656,7 @@ export default function App() {
                       className="compare-handle"
                       style={{ left: `${comparePosition}%` }}
                       role="slider"
-                      aria-label="Before / After 比較位置"
+                      aria-label={tr("Before / After 比較位置", "Before / After comparison position")}
                       aria-valuemin={4}
                       aria-valuemax={96}
                       aria-valuenow={Math.round(comparePosition)}

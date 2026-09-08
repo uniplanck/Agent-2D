@@ -108,4 +108,6 @@ These external codec executables are discovered from the local system and are no
 
 ## Agent-2D license
 
-No public distribution license for Agent-2D itself has been declared yet. Do not infer a project license from any dependency listed above.
+Agent-2D's own source code is licensed under the MIT License. The authoritative project license text is the root [`LICENSE`](LICENSE) file.
+
+That MIT license applies only to Agent-2D's own code and documentation. It does not replace, override, or relicense the third-party software, runtime binaries, Python packages, model weights, or external codec tools listed above; those remain governed by their respective upstream terms.
