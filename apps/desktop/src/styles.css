@@ -674,6 +674,23 @@ select:disabled, input:disabled { opacity: 1; border-color: var(--border); backg
 .settings-toggle.active { background: var(--accent); }
 .settings-toggle.active span { translate: 17px 0; }
 .settings-toggle:focus-visible { box-shadow: 0 0 0 3px var(--focus); }
+.runtime-panel { overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.runtime-row { min-height: 58px; display: grid; grid-template-columns: minmax(0,1fr) auto 74px; align-items: center; gap: 12px; padding: 10px 13px; border-top: 1px solid var(--border); }
+.runtime-row:first-of-type { border-top: 0; }
+.runtime-row > div { min-width: 0; display: grid; gap: 3px; }
+.runtime-row strong { color: var(--text-strong); font-size: 10px; }
+.runtime-row small { overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 8px; white-space: nowrap; }
+.runtime-row > button { min-height: 32px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-soft); color: var(--text-strong); cursor: pointer; font-size: 8.5px; font-weight: 750; }
+.runtime-row > button:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-hover); }
+.runtime-row > button:disabled { cursor: default; opacity: .5; }
+.runtime-state { min-width: 58px; border-radius: 999px; padding: 4px 7px; text-align: center; font-size: 7.5px; font-weight: 800; }
+.runtime-state.ready { background: rgba(69,141,103,.12); color: #4f8a6d; }
+.runtime-state.missing { background: var(--surface-soft); color: var(--muted); }
+.runtime-note { margin: 0; border-top: 1px solid var(--border); background: var(--surface-soft); color: var(--muted); padding: 8px 13px; font-size: 7.5px; line-height: 1.45; }
+.runtime-install-progress { display: grid; gap: 7px; border-bottom: 1px solid var(--border); background: var(--accent-soft); color: var(--text-strong); padding: 9px 13px; font-size: 8.5px; font-weight: 700; }
+.runtime-install-progress i { position: relative; height: 3px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.runtime-install-progress i::after { content: ""; position: absolute; inset: 0 auto 0 -35%; width: 35%; border-radius: inherit; background: var(--accent); animation: runtime-progress 1.2s ease-in-out infinite; }
+@keyframes runtime-progress { 0% { translate: 0 0; } 100% { translate: 390% 0; } }
 .theme-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
 .theme-grid > button { min-width: 0; min-height: 82px; display: flex; flex-direction: column; align-items: stretch; gap: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 9px; color: var(--text); cursor: pointer; text-align: left; }
 .theme-grid > button:hover { border-color: var(--border-strong); background: var(--surface-hover); }

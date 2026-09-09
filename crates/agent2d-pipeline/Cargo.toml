@@ -13,6 +13,7 @@ agent2d-sr = { path = "../agent2d-sr" }
 image.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
 tempfile = "3"
 uuid.workspace = true
 vtracer.workspace = true

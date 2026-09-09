@@ -23,6 +23,33 @@
 
 ---
 
+## Download Agent-2D
+
+**For Apple Silicon Macs.** Normal Desktop users do **not** need Rust, Node.js, Xcode Command Line Tools, Homebrew, `npm`, `cargo`, or Terminal.
+
+1. Download **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)** from GitHub Releases.
+2. Unzip it.
+3. Double-click **Agent-2D.app**. Moving it to `/Applications` is optional.
+4. When an AI feature needs Real-ESRGAN, FeyNoBg, SAM 2.1, or Big-LaMa for the first time, Agent-2D prepares the managed runtime from the GUI and then runs image processing locally.
+
+This project currently uses ad-hoc macOS signing and is not notarized. If macOS blocks the first launch, **Control-click / right-click Agent-2D.app → Open**. If macOS still blocks it, use **System Settings → Privacy & Security → Open Anyway**. No Terminal command is required.
+
+The Release ZIP is the general-user download. **Code → Download ZIP** and `git clone` are source-code paths, not the Desktop download path.
+
+## Build from source
+
+This path is for developers and contributors. It requires Rust 1.87+, Node.js 20+, and Xcode Command Line Tools:
+
+```bash
+git clone https://github.com/uniplanck/Agent-2D.git
+cd Agent-2D/apps/desktop
+npm install
+npm run typecheck
+npm run release:app
+```
+
+General users should use the Release ZIP above instead.
+
 <a id="english"></a>
 
 ## English
@@ -43,7 +70,7 @@ The same Rust processing core powers the Desktop app, CLI, and MCP server. Image
 | **Cutout** | Two sidebar modes: automatic background removal or click/box object editing and erase-and-fill | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | Convert logos, icons, line art, and flat illustrations to real SVG paths | VTracer |
 
-Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The Desktop app automatically hides codec-dependent formats when their required local backend is unavailable. **Optimize is no longer a separate Desktop tab**: use **Enhance → Compress after enhancement** to run the same super-resolution → compression pipeline. The CLI/MCP optimize contract remains available. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, and multiple UI themes are included. The Desktop UI supports **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**, and **System** selects the first supported language from the macOS preferred-language list.
+Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. PNG/JPEG/WebP/AVIF/TIFF/BMP output paths do not require Homebrew on a clean Mac; AVIF encoding is built into the Rust app. JPEG XL remains optional and is hidden when its local codec backend is unavailable. Target-size lossy WebP can use `cwebp` when present, while standard WebP remains available without it. **Optimize is no longer a separate Desktop tab**: use **Enhance → Compress after enhancement** to run the same super-resolution → compression pipeline. The CLI/MCP optimize contract remains available. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, and multiple UI themes are included. The Desktop UI supports **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**, and **System** selects the first supported language from the macOS preferred-language list.
 
 ### Interfaces
 
@@ -69,9 +96,9 @@ docs/      Architecture, development notes, research, and screenshots
 
 Start with this README for usage, [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflow, and [`docs/README.md`](docs/README.md) for deeper technical notes.
 
-### Requirements
+### Developer requirements
 
-Current development and release validation targets **macOS on Apple Silicon**.
+Current development and release validation targets **macOS on Apple Silicon**. These requirements apply only when building from source, not when using the Release ZIP.
 
 For a source build, install:
 
@@ -79,9 +106,9 @@ For a source build, install:
 - Node.js **20+**
 - Xcode Command Line Tools
 
-Some compression/format paths discover local codec tools such as `ffmpeg`, `cwebp`, or `cjxl`. Optional AI runtimes are installed explicitly by Agent-2D and are not committed to this repository.
+Optional advanced codec paths can discover local tools such as `cwebp`, `ffmpeg`, or `cjxl`, but the Release Desktop does not require the user to install them for its native PNG/JPEG/WebP/AVIF/TIFF/BMP output paths. Large AI runtimes are managed outside the app bundle and are prepared by Agent-2D itself.
 
-### Quick start: Desktop
+### Developer Desktop build
 
 ```bash
 git clone https://github.com/uniplanck/Agent-2D.git
@@ -113,7 +140,7 @@ Release packaging is defined in [`.github/workflows/release.yml`](.github/workfl
 
 ### Optional AI runtimes
 
-Agent-2D keeps large model/runtime assets outside the app bundle and downloads them only after an explicit install action.
+Agent-2D keeps large model/runtime assets outside the app bundle. In the Desktop app, the first use of a feature automatically offers/prepares its missing managed runtime, and **Settings → AI Runtime** also provides status and Install/Repair controls. No Homebrew or Terminal setup is required for normal Desktop use.
 
 #### Super resolution
 
@@ -221,7 +248,7 @@ agent2d_capabilities
 
 ### Local-first boundary
 
-Agent-2D does not bundle the large Real-ESRGAN, FeyNoBg, SAM 2.1, or Big-LaMa model assets in the Git repository. Managed installers fetch those assets only after a user explicitly requests installation. Normal processing is designed to stay on the local machine after the required runtime is present.
+Agent-2D does not bundle the large Real-ESRGAN, FeyNoBg, SAM 2.1, or Big-LaMa model assets in the Git repository or general-user ZIP. The Desktop prepares a missing managed runtime on first use (or through Settings → AI Runtime), then normal processing stays on the local machine.
 
 ### Validation
 
@@ -261,6 +288,14 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 ![Agent-2D Desktop — 日本語](docs/assets/screenshots/agent2d-ja.png)
 
+### Agent-2Dをダウンロード
+
+Apple Silicon Macでは、GitHub Releasesの **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)** をダウンロードし、解凍して **Agent-2D.app** をダブルクリックするだけです。`/Applications`への移動は任意です。Rust / Node.js / Xcode / Homebrew / Terminalは必要ありません。
+
+現在はnotarizationを行っていないため、初回起動をmacOSに止められた場合は **Agent-2D.appをControlクリック（右クリック）→「開く」**、それでも止まる場合は **システム設定 → プライバシーとセキュリティ →「このまま開く」** を使います。Terminal操作は不要です。
+
+AI機能を初めて使うと、必要なReal-ESRGAN / FeyNoBg / SAM 2.1 / Big-LaMaをAgent-2D自身が準備します。設定の **AI Runtime** から状態確認・Install / Repairもできます。導入後の画像処理はローカルです。
+
 ### できること
 
 | 機能 | 内容 | 主なエンジン |
@@ -275,7 +310,7 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 ### なぜローカルで動かすのか
 
-画像を扱うたびに外部サービスへアップロードする構成は便利ですが、処理の再現性、待ち時間、ネットワーク依存、画像の扱いを一つずつ外部へ預けることになります。Agent-2Dでは、大きなAIモデルも含め、必要なruntimeを一度明示的に導入したあとはローカル処理を基本にしています。
+画像を扱うたびに外部サービスへアップロードする構成は便利ですが、処理の再現性、待ち時間、ネットワーク依存、画像の扱いを一つずつ外部へ預けることになります。Agent-2Dでは、大きなAIモデルも含め、必要なruntimeを初回利用時にアプリ自身が準備し、そのあとはローカル処理を基本にしています。
 
 ただし、最初のruntime導入時には上流の配布元からモデルや依存パッケージを取得します。リポジトリ自体に1GB級のモデルを埋め込んでいるわけではありません。この境界は、アプリを軽く保つためだけでなく、各モデルの配布条件をAgent-2D本体のMIT Licenseと混同しないためにも重要です。
 
@@ -295,15 +330,15 @@ AI AgentからMCPを使う場合も、Desktopとは別の簡易版処理へ落�
 
 現在の開発・release検証は **Apple Silicon搭載macOS** を基準にしています。
 
-Sourceからbuildする場合は、少なくとも次を用意してください。
+Sourceからbuildする開発者だけ、少なくとも次を用意してください。Release ZIPを使う一般ユーザーには不要です。
 
 - Rust **1.87以上**
 - Node.js **20以上**
 - Xcode Command Line Tools
 
-圧縮形式によっては、ローカル環境の`ffmpeg`、`cwebp`、`cjxl`などを利用します。Real-ESRGAN、FeyNoBg、SAM 2.1、Big-LaMaの大きなruntimeは別途明示的に導入します。
+PNG / JPEG / WebP / AVIF / TIFF / BMPの主要出力は、Release版でHomebrewなどの手動導入を要求しません。AVIF encodeもRust内蔵です。JPEG XLなど一部のoptional経路は対応codecがない環境では安全に非表示になります。Real-ESRGAN、FeyNoBg、SAM 2.1、Big-LaMaはアプリが必要時に管理runtimeとして準備します。
 
-### Desktopをbuildする
+### ソースからDesktopをbuildする
 
 ```bash
 git clone https://github.com/uniplanck/Agent-2D.git

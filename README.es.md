@@ -18,6 +18,14 @@ Desktop, CLI y MCP comparten el mismo núcleo de procesamiento en Rust, por lo q
 
 La interfaz Desktop admite **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**. Al elegir **System**, se utiliza el primer idioma compatible de la lista de idiomas preferidos de macOS.
 
+## Descargar Agent-2D
+
+Para usuarios normales de Mac con Apple Silicon, descarga **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)**, descomprímelo y abre **Agent-2D.app** con doble clic. Moverlo a `/Applications` es opcional. El uso normal de Desktop no requiere Rust, Node.js, Xcode Command Line Tools, Homebrew, npm, cargo ni Terminal.
+
+La aplicación aún no está notarizada por Apple. Si macOS bloquea el primer inicio, usa **Control/clic derecho en Agent-2D.app → Abrir**; si sigue bloqueado, ve a **Ajustes del Sistema → Privacidad y seguridad → Abrir igualmente**. No se necesita ningún comando de Terminal.
+
+Al usar por primera vez una función de IA como Enhance, Cutout u Object Edit, Agent-2D prepara por sí mismo Real-ESRGAN, FeyNoBg, SAM 2.1 y Big-LaMa. **Settings → AI Runtime** permite ver el estado y usar Install / Repair. Después, el procesamiento se realiza localmente.
+
 ## Funciones principales
 
 | Función | Descripción | Motor principal |
@@ -36,15 +44,19 @@ También incluye rutas de entrada/salida para PNG, JPEG, WebP, AVIF y JPEG XL se
 
 El objetivo actual de desarrollo y validación es **macOS sobre Apple Silicon**.
 
-Para compilar desde el código fuente:
+Solo Developer / Contributor que compilen desde el código fuente necesitan:
 
 - Rust **1.87+**
 - Node.js **20+**
 - Xcode Command Line Tools
 
-Algunas rutas de compresión/formato utilizan herramientas locales como `ffmpeg`, `cwebp` o `cjxl`. Los runtimes de IA grandes no se guardan en el repositorio y solo se descargan cuando el usuario solicita su instalación.
+Las rutas principales de salida PNG / JPEG / WebP / AVIF / TIFF / BMP del Release Desktop no requieren instalar codecs con Homebrew; la codificación AVIF está integrada en la aplicación Rust. Funciones opcionales como JPEG XL se ocultan de forma segura si falta su codec. Los runtimes grandes de IA no se incluyen en la app: Agent-2D los prepara en el primer uso y Settings → AI Runtime permite Install / Repair.
 
-## Compilar Desktop
+## Compilar desde el código fuente
+
+Los siguientes pasos son solo para Developer / Contributor. Los usuarios normales deben usar el ZIP de Release anterior.
+
+### Compilar Desktop
 
 ```bash
 git clone https://github.com/uniplanck/Agent-2D.git
@@ -147,7 +159,7 @@ agent2d_capabilities
 
 ## Límite local-first
 
-Los modelos grandes de Real-ESRGAN, FeyNoBg, SAM 2.1 y Big-LaMa no se incluyen en el repositorio. Se descargan desde sus fuentes upstream únicamente cuando el usuario instala explícitamente el runtime correspondiente. Una vez instalado, el procesamiento normal está diseñado para ejecutarse localmente.
+Los modelos grandes de Real-ESRGAN, FeyNoBg, SAM 2.1 y Big-LaMa no se incluyen en el repositorio ni en el ZIP para usuarios. Al usar por primera vez una función relacionada, Agent-2D prepara el runtime necesario desde la fuente upstream; después, el procesamiento normal se ejecuta localmente.
 
 ## Licencia
 

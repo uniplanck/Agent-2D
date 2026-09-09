@@ -49,9 +49,38 @@ jobs:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
           releaseName: Agent-2D ${{ github.ref_name }}
-          releaseBody: "See the repository history and release notes for changes in this version."
+          releaseBody: "Download Agent-2D-macOS-arm64.zip, unzip it, and open Agent-2D.app. No Rust, Node.js, Xcode, Homebrew, or Terminal setup is required for normal Desktop use."
           releaseDraft: false
           prerelease: false
           generateReleaseNotes: true
           uploadUpdaterJson: true
           args: --config src-tauri/tauri.release.conf.json --target aarch64-apple-darwin
+
+      - name: Package general-user macOS ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app"
+          ZIP="Agent-2D-macOS-arm64.zip"
+          test -x "$APP/Contents/MacOS/agent2d-desktop"
+          file "$APP/Contents/MacOS/agent2d-desktop" | grep -q "arm64"
+          codesign --verify --deep --strict "$APP"
+          APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+          test "$APP_VERSION" = "${GITHUB_REF_NAME#v}"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+
+          VERIFY_DIR="$RUNNER_TEMP/agent2d-release-zip-check"
+          rm -rf "$VERIFY_DIR"
+          mkdir -p "$VERIFY_DIR"
+          ditto -x -k "$ZIP" "$VERIFY_DIR"
+          UNZIPPED="$VERIFY_DIR/Agent-2D.app"
+          test -x "$UNZIPPED/Contents/MacOS/agent2d-desktop"
+          file "$UNZIPPED/Contents/MacOS/agent2d-desktop" | grep -q "arm64"
+          codesign --verify --deep --strict "$UNZIPPED"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$UNZIPPED/Contents/Info.plist")" = "$APP_VERSION"
+          ls -lh "$ZIP"
+
+      - name: Upload general-user ZIP
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" Agent-2D-macOS-arm64.zip --clobber

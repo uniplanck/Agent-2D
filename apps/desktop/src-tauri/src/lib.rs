@@ -556,14 +556,10 @@ fn backend_capabilities_command() -> BackendCapabilities {
     let ffprobe = backend_available("ffprobe");
     let cwebp = backend_available("cwebp");
     let cjxl = backend_available("cjxl");
-    let mut standard_formats = vec!["png", "jpeg", "webp", "tiff", "bmp"];
-    let mut compact_formats = vec!["png", "jpeg", "tiff", "bmp"];
+    let mut standard_formats = vec!["png", "jpeg", "webp", "avif", "tiff", "bmp"];
+    let mut compact_formats = vec!["png", "jpeg", "avif", "tiff", "bmp"];
     if cwebp {
         compact_formats.push("webp");
-    }
-    if ffmpeg && ffprobe {
-        standard_formats.push("avif");
-        compact_formats.push("avif");
     }
     if cjxl && ffmpeg && ffprobe {
         standard_formats.push("jxl");
@@ -580,9 +576,10 @@ fn backend_capabilities_command() -> BackendCapabilities {
 }
 
 #[tauri::command]
-fn install_runtime_command() -> Result<SrCapabilities, ErrorPayload> {
-    install_runtime()
-        .and_then(|_| capabilities())
+async fn install_runtime_command() -> Result<SrCapabilities, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(|| install_runtime().and_then(|_| capabilities()))
+        .await
+        .map_err(|error| internal_error(format!("super-resolution runtime installer task failed: {error}")))?
         .map_err(|error| error.payload())
 }
 

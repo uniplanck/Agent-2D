@@ -15,6 +15,7 @@ use agent2d_core::{
 use image::{
     ColorType, GenericImageView, ImageEncoder, ImageFormat,
     codecs::{
+        avif::AvifEncoder,
         jpeg::JpegEncoder,
         png::{CompressionType, FilterType, PngEncoder},
     },
@@ -85,8 +86,9 @@ pub fn compress_image_with_cancel(
             Some(true)
         }
         (CompressionMode::Preserve, OutputFormat::Avif) => {
-            run_ffmpeg_avif_preserve(&request.input_path, &request.output_path, cancellation)?;
+            encode_avif_quality(&request.input_path, &request.output_path, 95, cancellation)?;
             warnings.push("avif_preserve_is_visually_lossless_not_pixel_exact".to_owned());
+            warnings.push("avif_encoded_with_bundled_rust_codec".to_owned());
             Some(false)
         }
         (CompressionMode::Preserve, OutputFormat::Jpeg) => {
@@ -146,7 +148,8 @@ pub fn compress_image_with_cancel(
                 })?;
             decoded.dimensions()
         }
-        OutputFormat::Avif | OutputFormat::Jxl => probe_dimensions(&request.output_path)?,
+        OutputFormat::Avif => (input.width, input.height),
+        OutputFormat::Jxl => probe_dimensions(&request.output_path)?,
     };
 
     if output_width != input.width || output_height != input.height {
@@ -394,39 +397,40 @@ fn run_ffmpeg_png_decode(
     )
 }
 
-fn run_ffmpeg_avif_preserve(
+fn encode_avif_quality(
     input: &Path,
     output: &Path,
+    quality: u8,
     cancellation: &CancellationToken,
 ) -> Result<(), Agent2DError> {
-    run_backend(
-        "ffmpeg",
-        vec![
-            "-hide_banner".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-n".into(),
-            "-i".into(),
-            input.as_os_str().into(),
-            "-frames:v".into(),
-            "1".into(),
-            "-c:v".into(),
-            "libaom-av1".into(),
-            "-still-picture".into(),
-            "1".into(),
-            "-crf".into(),
-            "12".into(),
-            "-cpu-used".into(),
-            "4".into(),
-            "-pix_fmt".into(),
-            "yuv444p10le".into(),
-            "-f".into(),
-            "avif".into(),
-            output.as_os_str().into(),
-        ],
-        output,
-        cancellation,
-    )
+    if cancellation.is_cancelled() {
+        return Err(Agent2DError::Cancelled);
+    }
+    let prepared = prepare_png_for_backend(input, cancellation, &["avif", "jxl"])?;
+    let source = prepared.as_deref().unwrap_or(input);
+    let result = (|| {
+        let decoded = image::open(source).map_err(|source_error| Agent2DError::ImageDecode {
+            path: display_path(source),
+            source: source_error,
+        })?;
+        let (width, height) = decoded.dimensions();
+        let rgba = decoded.to_rgba8();
+        let file = File::create(output).map_err(|error| Agent2DError::ImageWrite {
+            path: display_path(output),
+            message: error.to_string(),
+        })?;
+        AvifEncoder::new_with_speed_quality(file, 4, quality.clamp(1, 100))
+            .write_image(rgba.as_raw(), width, height, ColorType::Rgba8.into())
+            .map_err(|error| {
+                cleanup_output(output);
+                Agent2DError::ImageWrite {
+                    path: display_path(output),
+                    message: error.to_string(),
+                }
+            })
+    })();
+    if let Some(path) = prepared { cleanup_output(&path); }
+    result
 }
 
 #[derive(Debug)]
@@ -513,15 +517,10 @@ fn encode_compact_to_target(
             Err(compact_unreachable(output, format, target_bytes))
         }
         OutputFormat::Avif => {
-            run_ffmpeg_avif_quality(input, output, 12, cancellation)?;
-            if compact_accepts(output, target_bytes)? {
-                return Ok(compact_success(target_bytes, Some(false), "compact_avif_crf_12".into()));
-            }
-            cleanup_output(output);
-            for crf in [16u8, 20, 24, 28, 32, 36, 40, 45, 50, 55, 60, 63] {
-                run_ffmpeg_avif_quality(input, output, crf, cancellation)?;
+            for quality in [95u8, 90, 85, 80, 75, 70, 60, 50, 40, 30, 20, 10, 5] {
+                encode_avif_quality(input, output, quality, cancellation)?;
                 if compact_accepts(output, target_bytes)? {
-                    return Ok(compact_success(target_bytes, Some(false), format!("compact_avif_crf_{crf}")));
+                    return Ok(compact_success(target_bytes, Some(false), format!("compact_avif_quality_{quality}_rust")));
                 }
                 cleanup_output(output);
             }
@@ -616,42 +615,6 @@ fn run_cjxl_lossy(
         cleanup_output(&path);
     }
     result
-}
-
-fn run_ffmpeg_avif_quality(
-    input: &Path,
-    output: &Path,
-    crf: u8,
-    cancellation: &CancellationToken,
-) -> Result<(), Agent2DError> {
-    run_backend(
-        "ffmpeg",
-        vec![
-            "-hide_banner".into(),
-            "-loglevel".into(),
-            "error".into(),
-            "-n".into(),
-            "-i".into(),
-            input.as_os_str().into(),
-            "-frames:v".into(),
-            "1".into(),
-            "-c:v".into(),
-            "libaom-av1".into(),
-            "-still-picture".into(),
-            "1".into(),
-            "-crf".into(),
-            crf.to_string().into(),
-            "-cpu-used".into(),
-            "4".into(),
-            "-pix_fmt".into(),
-            "yuv444p10le".into(),
-            "-f".into(),
-            "avif".into(),
-            output.as_os_str().into(),
-        ],
-        output,
-        cancellation,
-    )
 }
 
 fn prepare_png_for_backend(
@@ -919,10 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn avif_preserve_keeps_dimensions_when_ffmpeg_exists() {
-        if !command_exists("ffmpeg") || !command_exists("ffprobe") {
-            return;
-        }
+    fn avif_preserve_keeps_dimensions_without_external_codec() {
         let dir = tempdir().unwrap();
         let input = dir.path().join("input.png");
         let output = dir.path().join("output.avif");
@@ -940,10 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_preserve_accepts_png_input_when_ffmpeg_exists() {
-        if !command_exists("ffmpeg") {
-            return;
-        }
+    fn jpeg_preserve_accepts_png_input_without_external_codec() {
         let dir = tempdir().unwrap();
         let input = dir.path().join("input.png");
         let output = dir.path().join("output.jpeg");
@@ -1013,10 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_compact_respects_target_bytes_when_ffmpeg_exists() {
-        if !command_exists("ffmpeg") {
-            return;
-        }
+    fn jpeg_compact_respects_target_bytes_without_external_codec() {
         let dir = tempdir().unwrap();
         let input = dir.path().join("input.png");
         let output = dir.path().join("output.jpeg");

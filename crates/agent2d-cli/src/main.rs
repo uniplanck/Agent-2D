@@ -747,9 +747,9 @@ fn main() -> ExitCode {
                     schema_version: SCHEMA_VERSION,
                     compression: CompressionCapabilities {
                         png_exact: true,
-                        webp_lossless: command_exists("cwebp"),
-                        avif_preserve: command_exists("ffmpeg") && command_exists("ffprobe"),
-                        jpeg_preserve: command_exists("ffmpeg"),
+                        webp_lossless: true,
+                        avif_preserve: true,
+                        jpeg_preserve: true,
                         jxl_lossless: command_exists("cjxl")
                             && command_exists("ffmpeg")
                             && command_exists("ffprobe"),

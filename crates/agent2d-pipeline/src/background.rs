@@ -1,6 +1,7 @@
 use std::{
     env,
     fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     thread,
@@ -12,6 +13,7 @@ use agent2d_core::{
     OutputFormat, cleanup_output, inspect_image, validate_output_path,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -23,6 +25,9 @@ pub const BACKGROUND_RUNTIME_RELEASE_ID: &str = "feynobg-nobg-0.3.1-torch-2.14.0
 pub const BACKGROUND_NOBG_VERSION: &str = "0.3.1";
 pub const BACKGROUND_TORCH_VERSION: &str = "2.14.0";
 pub const BACKGROUND_TORCHVISION_VERSION: &str = "0.29.0";
+pub const BACKGROUND_PYTHON_RELEASE_ID: &str = "cpython-3.10.21+20260901-aarch64-apple-darwin-install_only";
+pub const BACKGROUND_PYTHON_SOURCE_URL: &str = "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.10.21%2B20260901-aarch64-apple-darwin-install_only.tar.gz";
+pub const BACKGROUND_PYTHON_ARCHIVE_SHA256: &str = "cee232aabfb6790eec78f3cca935caeb7bd4eedca4dcb0a10dbcdb4302320b38";
 
 const RUNNER_NAME: &str = "remove_bg.py";
 const READY_NAME: &str = "READY";
@@ -180,7 +185,6 @@ pub fn install_background_runtime() -> Result<BackgroundRuntimeStatus, Agent2DEr
         .ok_or_else(|| install_error("invalid background runtime root"))?;
     fs::create_dir_all(parent).map_err(|error| install_error(error.to_string()))?;
 
-    let bootstrap = find_bootstrap_python()?;
     // The model is large enough that interrupted installs must be resumable. A
     // deterministic staging directory lets pip and Hugging Face continue from
     // their existing local files rather than discarding gigabytes of progress.
@@ -190,10 +194,10 @@ pub fn install_background_runtime() -> Result<BackgroundRuntimeStatus, Agent2DEr
         fs::create_dir_all(&staging).map_err(|error| install_error(error.to_string()))?;
 
         if !paths.python.is_file() {
-            run_checked(&bootstrap, &["-m", "venv", staging.to_string_lossy().as_ref()], &[])?;
+            install_portable_python(&staging)?;
         }
         if !paths.python.is_file() {
-            return Err(install_error("Python virtual environment did not create bin/python"));
+            return Err(install_error("portable Python runtime did not provide bin/python"));
         }
         run_checked(
             &paths.python,
@@ -435,33 +439,66 @@ fn managed_background_runtime_root() -> Result<PathBuf, Agent2DError> {
         .join(BACKGROUND_RUNTIME_RELEASE_ID))
 }
 
-fn find_bootstrap_python() -> Result<PathBuf, Agent2DError> {
-    if let Some(path) = env::var_os("AGENT2D_BG_BOOTSTRAP_PYTHON") {
-        let path = PathBuf::from(path);
-        if compatible_python(&path) {
-            return Ok(path);
-        }
-        return Err(install_error("AGENT2D_BG_BOOTSTRAP_PYTHON must point to Python 3.10+"));
+fn install_portable_python(staging: &Path) -> Result<(), Agent2DError> {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Err(install_error("the managed portable Python runtime currently supports Apple Silicon macOS"));
     }
-    for candidate in ["python3.11", "python3.13", "python3.12", "python3.10", "python3"] {
-        let path = PathBuf::from(candidate);
-        if compatible_python(&path) {
-            return Ok(path);
-        }
-    }
-    Err(Agent2DError::BackendUnavailable {
-        backend: "Python 3.10+ is required to install the managed FeyNoBg runtime".into(),
-    })
-}
-
-fn compatible_python(program: &Path) -> bool {
-    Command::new(program)
+    let temp = tempdir().map_err(|error| install_error(error.to_string()))?;
+    let archive = temp.path().join("python.tar.gz");
+    run_checked(
+        Path::new("/usr/bin/curl"),
+        &[
+            "-fL",
+            "--retry",
+            "2",
+            "--connect-timeout",
+            "20",
+            "-o",
+            archive.to_string_lossy().as_ref(),
+            BACKGROUND_PYTHON_SOURCE_URL,
+        ],
+        &[],
+    )?;
+    verify_file_sha256(&archive, BACKGROUND_PYTHON_ARCHIVE_SHA256)?;
+    run_checked(
+        Path::new("/usr/bin/tar"),
+        &[
+            "-xzf",
+            archive.to_string_lossy().as_ref(),
+            "-C",
+            staging.to_string_lossy().as_ref(),
+            "--strip-components",
+            "1",
+        ],
+        &[],
+    )?;
+    let python = staging.join("bin").join("python");
+    let status = Command::new(&python)
         .args(["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3,10) else 1)"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .map_err(|error| install_error(format!("portable Python verification failed: {error}")))?;
+    if !status.success() {
+        return Err(install_error("portable Python verification failed"));
+    }
+    Ok(())
+}
+
+fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), Agent2DError> {
+    let mut file = File::open(path).map_err(|error| install_error(error.to_string()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|error| install_error(error.to_string()))?;
+        if read == 0 { break; }
+        hasher.update(&buffer[..read]);
+    }
+    let actual = format!("{:x}", hasher.finalize());
+    if actual != expected {
+        return Err(install_error(format!("portable Python SHA-256 mismatch: expected {expected}, got {actual}")));
+    }
+    Ok(())
 }
 
 fn run_checked(program: &Path, args: &[&str], envs: &[(&str, &str)]) -> Result<(), Agent2DError> {
@@ -494,7 +531,7 @@ fn tail_chars(value: &str, max: usize) -> String {
 
 fn runtime_notice() -> String {
     format!(
-        "Agent-2D managed background-removal runtime\n\nModel: {BACKGROUND_MODEL_ID}\nModel revision: {BACKGROUND_MODEL_REVISION}\nModel/project license: Apache-2.0\nNoBg: {BACKGROUND_NOBG_VERSION}\nPyTorch: {BACKGROUND_TORCH_VERSION}\nTorchVision: {BACKGROUND_TORCHVISION_VERSION}\n\nThe model and Python dependencies were downloaded during an explicit install action. Normal background removal runs with HF_HUB_OFFLINE=1.\nSee Agent-2D THIRD_PARTY_NOTICES.md for upstream references and distribution notes.\n"
+        "Agent-2D managed background-removal runtime\n\nModel: {BACKGROUND_MODEL_ID}\nModel revision: {BACKGROUND_MODEL_REVISION}\nModel/project license: Apache-2.0\nNoBg: {BACKGROUND_NOBG_VERSION}\nPyTorch: {BACKGROUND_TORCH_VERSION}\nTorchVision: {BACKGROUND_TORCHVISION_VERSION}\n\nPortable Python: {BACKGROUND_PYTHON_RELEASE_ID}\nPortable Python source: {BACKGROUND_PYTHON_SOURCE_URL}\nPortable Python archive SHA-256: {BACKGROUND_PYTHON_ARCHIVE_SHA256}\n\nThe app bootstraps its own portable Python runtime, so users do not need a system Python, Homebrew, Xcode, Rust, or Node.js. The model and Python dependencies are downloaded by Agent-2D during installation. Normal background removal runs with HF_HUB_OFFLINE=1.\nSee Agent-2D THIRD_PARTY_NOTICES.md for upstream references and distribution notes.\n"
     )
 }
 
@@ -519,8 +556,21 @@ mod tests {
         assert_eq!(BACKGROUND_MODEL_REVISION, "c1fd67fbefe3efeb78fe2a003270fb5350a0bb1c");
         assert_eq!(BACKGROUND_NOBG_VERSION, "0.3.1");
         assert_eq!(BACKGROUND_TORCH_VERSION, "2.14.0");
+        assert_eq!(BACKGROUND_PYTHON_RELEASE_ID, "cpython-3.10.21+20260901-aarch64-apple-darwin-install_only");
+        assert_eq!(BACKGROUND_PYTHON_ARCHIVE_SHA256.len(), 64);
+        assert!(BACKGROUND_PYTHON_SOURCE_URL.starts_with("https://github.com/astral-sh/python-build-standalone/releases/download/"));
         assert!(RUNNER_SCRIPT.contains("post_process_alpha_matting"));
         assert!(RUNNER_SCRIPT.contains("feyninc/FeyNobg"));
+    }
+
+    #[test]
+    fn portable_python_checksum_verifier_is_fail_closed() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("fixture.bin");
+        fs::write(&file, b"agent2d-portable-python").unwrap();
+        let expected = format!("{:x}", Sha256::digest(b"agent2d-portable-python"));
+        verify_file_sha256(&file, &expected).unwrap();
+        assert!(verify_file_sha256(&file, &"0".repeat(64)).is_err());
     }
 
     #[test]

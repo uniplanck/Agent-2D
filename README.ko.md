@@ -18,6 +18,14 @@ Desktop, CLI, MCP는 모두 같은 Rust 처리 코어를 사용하므로 인터�
 
 Desktop UI는 **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**를 지원합니다. **System**을 선택하면 macOS 선호 언어 목록에서 처음 지원되는 언어를 사용합니다.
 
+## Agent-2D 다운로드
+
+일반 Apple Silicon Mac 사용자는 **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)** 을 다운로드하고 압축을 푼 뒤 **Agent-2D.app** 을 더블 클릭하면 됩니다. `/Applications`로 옮기는 것은 선택 사항입니다. 일반 Desktop 사용에는 Rust, Node.js, Xcode Command Line Tools, Homebrew, npm, cargo, Terminal이 필요하지 않습니다.
+
+현재 Apple notarization은 적용하지 않았습니다. macOS가 첫 실행을 차단하면 **Control/오른쪽 클릭 Agent-2D.app → 열기**를 사용하고, 계속 차단되면 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 사용하세요. Terminal 명령은 필요하지 않습니다.
+
+Enhance / Cutout / Object Edit 같은 AI 기능을 처음 사용할 때 Agent-2D가 Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa를 직접 준비합니다. **Settings → AI Runtime**에서도 상태 확인과 Install / Repair가 가능합니다. 설치 후 이미지 처리는 로컬에서 실행됩니다.
+
 ## 주요 기능
 
 | 기능 | 설명 | 주요 엔진 |
@@ -36,15 +44,19 @@ PNG, JPEG, WebP, AVIF, JPEG XL 관련 입출력 경로, 다중 포맷 동시 출
 
 현재 개발 및 release 검증 기준은 **Apple Silicon macOS**입니다.
 
-소스에서 빌드하려면 다음이 필요합니다.
+소스에서 빌드하는 Developer / Contributor에게만 다음이 필요합니다.
 
 - Rust **1.87+**
 - Node.js **20+**
 - Xcode Command Line Tools
 
-일부 압축/포맷 처리에서는 로컬의 `ffmpeg`, `cwebp`, `cjxl`을 사용합니다. 대형 AI runtime은 Git 저장소에 포함되지 않으며 사용자가 명시적으로 설치할 때만 다운로드됩니다.
+Release Desktop의 PNG / JPEG / WebP / AVIF / TIFF / BMP 주요 출력에는 Homebrew로 codec을 수동 설치할 필요가 없으며 AVIF 인코딩도 Rust 앱에 내장되어 있습니다. JPEG XL 같은 선택 기능은 codec이 없으면 안전하게 숨겨집니다. 대형 AI runtime은 app에 넣지 않고 첫 사용 시 Agent-2D가 자동 준비하며 Settings → AI Runtime에서 Install / Repair도 할 수 있습니다.
 
-## Desktop 빌드
+## 소스에서 빌드
+
+아래 단계는 Developer / Contributor용입니다. 일반 사용자는 위 Release ZIP을 사용하세요.
+
+### Desktop 빌드
 
 ```bash
 git clone https://github.com/uniplanck/Agent-2D.git
@@ -147,7 +159,7 @@ agent2d_capabilities
 
 ## Local-first 경계
 
-Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa의 대형 모델 파일은 저장소에 포함되지 않습니다. 사용자가 runtime 설치를 명시적으로 요청했을 때만 upstream 배포처에서 내려받습니다. 필요한 runtime이 준비된 뒤의 일반 이미지 처리는 로컬 실행을 기본으로 합니다.
+Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa의 대형 모델 파일은 저장소나 일반 사용자 ZIP에 포함되지 않습니다. 관련 기능을 처음 사용할 때 Agent-2D가 upstream에서 필요한 runtime을 준비하며, 이후 일반 이미지 처리는 로컬 실행을 기본으로 합니다.
 
 ## License
 

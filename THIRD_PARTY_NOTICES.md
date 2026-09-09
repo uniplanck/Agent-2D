@@ -1,12 +1,12 @@
 # Agent-2D Third-Party Notices
 
-Updated: 2026-09-05
+Updated: 2026-09-09
 
 This document records the main third-party boundaries used by Agent-2D v0.1. It is an engineering inventory, not legal advice.
 
 ## Real-ESRGAN-ncnn-vulkan
 
-Agent-2D's managed super-resolution runtime downloads the official macOS portable release from the upstream Real-ESRGAN project only after an explicit runtime-install action.
+Agent-2D's managed super-resolution runtime downloads the official macOS portable release from the upstream Real-ESRGAN project when the user first invokes an AI-upscale feature or chooses Install/Repair in the Desktop runtime settings.
 
 - Project: `xinntao/Real-ESRGAN-ncnn-vulkan`
 - Upstream license: MIT
@@ -49,7 +49,7 @@ Model and dataset terms can be more specific than a repository-level software li
 
 ## FeyNoBg background-removal model and managed Python runtime
 
-Agent-2D's `Remove BG` operation uses the FeyNoBg model through the upstream NoBg Python library. The application bundle does not vendor the model or Python inference environment. An explicit user install action creates a dedicated runtime under the user's Agent-2D Application Support directory and downloads the dependencies from their normal upstream package/model channels.
+Agent-2D's `Remove BG` operation uses the FeyNoBg model through the upstream NoBg Python library. The application bundle does not vendor the model, PyTorch wheels, or Python inference environment. The Desktop app bootstraps a dedicated portable Python runtime under the user's Agent-2D Application Support directory when the feature is first used (or Install/Repair is selected), then downloads dependencies from their normal upstream package/model channels.
 
 - Model: `feyninc/FeyNobg`
 - Pinned model revision: `c1fd67fbefe3efeb78fe2a003270fb5350a0bb1c`
@@ -61,11 +61,20 @@ Agent-2D's `Remove BG` operation uses the FeyNoBg model through the upstream NoB
 - Repository: https://github.com/feyninc/nobg
 - Inference framework: PyTorch `2.14.0` + TorchVision `0.29.0`
 
-The managed installer downloads these assets only after an explicit install action. Normal background-removal inference is configured with Hugging Face offline mode and runs locally. A future Agent-2D package that redistributes FeyNoBg weights, NoBg/PyTorch wheels, or their transitive Python dependencies must include the applicable license texts, notices, and a complete dependency inventory rather than relying on this engineering summary alone.
+The managed installer downloads these assets on demand. Normal background-removal inference is configured with Hugging Face offline mode and runs locally. Agent-2D also downloads a pinned Apple Silicon CPython build from `astral-sh/python-build-standalone` rather than requiring Homebrew or a system Python:
+
+- Packaging project: `astral-sh/python-build-standalone`
+- Packaging project license: MPL-2.0
+- Source: https://github.com/astral-sh/python-build-standalone
+- Pinned build: `cpython-3.10.21+20260901-aarch64-apple-darwin-install_only`
+- Archive SHA-256: `cee232aabfb6790eec78f3cca935caeb7bd4eedca4dcb0a10dbcdb4302320b38`
+- CPython itself remains governed by the Python Software Foundation / CPython license terms: https://github.com/python/cpython/blob/main/LICENSE
+
+The Python archive is downloaded at runtime rather than embedded in the Agent-2D Release ZIP. A future Agent-2D package that redistributes FeyNoBg weights, NoBg/PyTorch wheels, CPython, or their transitive dependencies must include the applicable license texts, notices, and a complete dependency inventory rather than relying on this engineering summary alone.
 
 ## SAM 2.1 Base+ and Big-LaMa object editing
 
-Agent-2D's `Object Edit` operation uses Meta's SAM 2.1 Base+ for interactive point / negative-point / box segmentation and Big-LaMa for optional image inpainting. The application bundle does not vendor either model. An explicit Object Edit runtime install reuses the existing FeyNoBg Python/PyTorch environment and downloads only the Object Edit-specific model assets into the user's Agent-2D Application Support directory.
+Agent-2D's `Object Edit` operation uses Meta's SAM 2.1 Base+ for interactive point / negative-point / box segmentation and Big-LaMa for optional image inpainting. The application bundle does not vendor either model. First use (or Install/Repair in Settings) reuses the managed FeyNoBg Python/PyTorch environment and downloads only the Object Edit-specific model assets into the user's Agent-2D Application Support directory.
 
 - Segmentation model: `facebook/sam2.1-hiera-base-plus`
 - Pinned Hugging Face revision used by Agent-2D: `b732075`
@@ -97,14 +106,21 @@ Unlike the optional Real-ESRGAN runtime, VTracer is linked into builds through C
 
 ## Compression backends
 
-Agent-2D currently uses:
+Agent-2D's general-user Release uses in-process Rust codecs for the normal PNG, JPEG, WebP, AVIF, TIFF, and BMP output paths. AVIF encoding is provided by the Rust `image` AVIF feature and its Rust codec stack rather than a redistributed FFmpeg executable.
 
-- Rust `image`/PNG code for Exact PNG processing and PNG/JPEG/WebP decoding where supported.
-- `cwebp` when WebP Lossless is requested.
-- `ffmpeg` / `ffprobe` with `libaom-av1` when AVIF Preserve is requested, for high-quality JPEG output, and for AVIF/JXL probing or intermediate decoding where required.
-- `cjxl` from the JPEG XL / libjxl toolchain when JXL Lossless is requested. JXL output is verified against decoded pixels before success is reported.
+Key AVIF encoder dependencies introduced for this path include:
 
-These external codec executables are discovered from the local system and are not bundled by Agent-2D. The current source changes therefore do not add libjxl, FFmpeg, WebP, or AV1 binaries to the application bundle. A future fully self-contained public distribution must review the exact redistributed codec builds and include all applicable upstream license texts/notices, or replace these adapters with audited in-process codecs.
+- `ravif` `0.12.x` — BSD-3-Clause — https://github.com/kornelski/cavif-rs
+- `rav1e` `0.8.x` — BSD-2-Clause — https://github.com/xiph/rav1e/
+- `avif-serialize` `0.8.x` — BSD-3-Clause — https://github.com/kornelski/avif-serialize
+
+External codec executables remain optional adapters rather than general-user prerequisites:
+
+- `cwebp` may be used for target-size lossy WebP; normal WebP remains available through the in-process lossless path.
+- `ffmpeg` / `ffprobe` remain useful for some external-codec input/probing paths such as AVIF/JXL source conversion.
+- `cjxl` is used for JPEG XL output. JPEG XL is capability-gated and hidden when the required local backend is unavailable.
+
+Agent-2D does **not** redistribute FFmpeg, libjxl/cjxl, or cwebp in the Release ZIP, so users are not silently given third-party executables whose redistribution terms were not reviewed. Missing optional codecs are handled by capability detection instead of requiring Homebrew.
 
 ## Agent-2D license
 

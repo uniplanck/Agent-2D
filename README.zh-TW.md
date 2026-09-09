@@ -18,6 +18,14 @@ Desktop、CLI 與 MCP 共用同一套 Rust processing core，因此不同入口�
 
 Desktop UI 支援 **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**。選擇 **System** 時，會從 macOS 偏好語言清單中使用第一個受支援的語言。
 
+## 下載 Agent-2D
+
+一般 Apple Silicon Mac 使用者請直接下載 **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)**：下載 → 解壓縮 → 雙擊 **Agent-2D.app**。是否移到 `/Applications` 都可以。一般 Desktop 使用不需要 Rust、Node.js、Xcode Command Line Tools、Homebrew、npm、cargo 或 Terminal。
+
+目前尚未進行 Apple notarization。若 macOS 阻擋第一次啟動，請 **Control/右鍵點擊 Agent-2D.app → 打開**；若仍被阻擋，前往 **系統設定 → 隱私權與安全性 → 仍要打開**。不需要 Terminal 指令。
+
+第一次使用 Enhance / Cutout / Object Edit 等 AI 功能時，Agent-2D 會自行準備 Real-ESRGAN、FeyNoBg、SAM 2.1 與 Big-LaMa；也可在 **Settings → AI Runtime** 查看狀態或執行 Install / Repair。安裝後影像處理會在本機執行。
+
 ## 主要功能
 
 | 功能 | 說明 | 主要引擎 |
@@ -36,15 +44,19 @@ Desktop UI 支援 **日本語 / English / 简体中文 / 繁體中文 / 한국�
 
 目前開發與 release 驗證以 **Apple Silicon macOS** 為基準。
 
-從原始碼建置需要：
+只有從原始碼建置的 Developer / Contributor 需要：
 
 - Rust **1.87+**
 - Node.js **20+**
 - Xcode Command Line Tools
 
-部分壓縮或格式路徑會使用本機的 `ffmpeg`、`cwebp`、`cjxl`。大型 AI runtime 不會存放在 Git repository 中，只會在使用者明確要求安裝時下載。
+Release Desktop 的 PNG / JPEG / WebP / AVIF / TIFF / BMP 主要輸出不需要用 Homebrew 手動安裝 codec；AVIF 編碼已內建於 Rust 應用。JPEG XL 等選用路徑在缺少 codec 時會安全隱藏。大型 AI runtime 不塞進 app，而是由 Agent-2D 在第一次使用時自動準備，也可從 Settings → AI Runtime 執行 Install / Repair。
 
-## 建置 Desktop
+## 從原始碼建置
+
+以下步驟只供 Developer / Contributor。一般使用者請使用上方 Release ZIP。
+
+### 建置 Desktop
 
 ```bash
 git clone https://github.com/uniplanck/Agent-2D.git
@@ -147,7 +159,7 @@ agent2d_capabilities
 
 ## Local-first 邊界
 
-Real-ESRGAN、FeyNoBg、SAM 2.1 與 Big-LaMa 的大型模型不會提交到 repository。只有在使用者明確執行 runtime 安裝後，Agent-2D 才會從 upstream 來源取得它們。runtime 已存在時，日常影像處理以本機執行為原則。
+Real-ESRGAN、FeyNoBg、SAM 2.1 與 Big-LaMa 的大型模型不會提交到 repository 或一般使用者 ZIP。第一次使用相關功能時，Agent-2D 會從 upstream 來源準備需要的 runtime；完成後日常影像處理以本機執行為原則。
 
 ## License
 

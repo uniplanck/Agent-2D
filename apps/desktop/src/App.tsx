@@ -954,7 +954,7 @@ function delay(ms: number): Promise<void> {
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(loadUiPreferences);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [appVersion, setAppVersion] = useState("0.1.2");
+  const [appVersion, setAppVersion] = useState("0.1.3");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [updateMessage, setUpdateMessage] = useState("");
@@ -1022,6 +1022,7 @@ export default function App() {
   const [objectRuntime, setObjectRuntime] = useState<ObjectEditRuntimeStatus | null>(null);
   const [objectRuntimeChecked, setObjectRuntimeChecked] = useState(false);
   const [installingObjectRuntime, setInstallingObjectRuntime] = useState(false);
+  const [runtimeInstallActivity, setRuntimeInstallActivity] = useState<{ kind: "sr" | "background" | "object"; label: string } | null>(null);
   const [objectRuntimeWarming, setObjectRuntimeWarming] = useState(false);
   const [objectTool, setObjectTool] = useState<ObjectTool>("include");
   const [objectPoints, setObjectPoints] = useState<ObjectPoint[]>([]);
@@ -1169,7 +1170,7 @@ export default function App() {
     ? targetBytesFrom(enhanceSizeCapValue, enhanceSizeCapUnit)
     : null;
   const compactOutputActive = customTargetBytes != null || enhanceTargetBytes != null;
-  const safeNativeFormats: OutputFormat[] = ["png", "jpeg", "webp", "tiff", "bmp"];
+  const safeNativeFormats: OutputFormat[] = ["png", "jpeg", "webp", "avif", "tiff", "bmp"];
   const backendAllowedFormats = new Set<OutputFormat>(
     compactOutputActive
       ? (backendCapabilities?.compactFormats ?? ["png", "jpeg", "tiff", "bmp"])
@@ -1343,48 +1344,61 @@ export default function App() {
     }
   }, [savedSizePresets]);
 
-  const installManagedRuntime = async () => {
-    if (installingRuntime) return;
+  const installManagedRuntime = async (): Promise<boolean> => {
+    if (installingRuntime) return false;
     setInstallingRuntime(true);
+    setRuntimeInstallActivity({ kind: "sr", label: tr("AI超解像ランタイムを準備中…", "Preparing AI upscaling runtime…") });
     setError("");
     try {
       const next = await invoke<SrCapabilities>("install_runtime_command");
       setCapabilities(next);
       setRuntimeChecked(true);
+      return true;
     } catch (cause) {
       setError(errorText(cause));
+      return false;
     } finally {
       setInstallingRuntime(false);
+      setRuntimeInstallActivity(null);
     }
   };
 
-  const installBackgroundRuntime = async () => {
-    if (installingBackgroundRuntime) return;
+  const installBackgroundRuntime = async (): Promise<boolean> => {
+    if (installingBackgroundRuntime) return false;
     setInstallingBackgroundRuntime(true);
+    setRuntimeInstallActivity({ kind: "background", label: tr("FeyNoBgとローカルAI環境を準備中…", "Preparing FeyNoBg and its local AI runtime…") });
     setError("");
     try {
       const next = await invoke<BackgroundRuntimeStatus>("install_background_runtime_command");
       setBackgroundRuntime(next);
       setBackgroundRuntimeChecked(true);
+      return true;
     } catch (cause) {
       setError(errorText(cause));
+      return false;
     } finally {
       setInstallingBackgroundRuntime(false);
+      setRuntimeInstallActivity(null);
     }
   };
 
-  const installObjectRuntime = async () => {
-    if (installingObjectRuntime) return;
+  const installObjectRuntime = async (): Promise<boolean> => {
+    if (installingObjectRuntime) return false;
     setInstallingObjectRuntime(true);
+    setRuntimeInstallActivity({ kind: "object", label: tr("SAM 2.1 / Big-LaMaを準備中…", "Preparing SAM 2.1 / Big-LaMa…") });
     setError("");
     try {
       const next = await invoke<ObjectEditRuntimeStatus>("install_object_edit_runtime_command");
       setObjectRuntime(next);
       setObjectRuntimeChecked(true);
+      await refreshBackgroundRuntime();
+      return true;
     } catch (cause) {
       setError(errorText(cause));
+      return false;
     } finally {
       setInstallingObjectRuntime(false);
+      setRuntimeInstallActivity(null);
     }
   };
 
@@ -1688,20 +1702,19 @@ export default function App() {
   }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, enhanceCompressionEnabled, enhanceTargetBytes, modelId, objectAction, operation, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
-    if (running || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0)) return;
-    if (operation === "remove-bg" && !backgroundRuntime?.installed) {
-      setError(tr("FeyNoBg runtimeを先にインストールしてください。", "Install the FeyNoBg runtime first."));
+    if (running || runtimeInstallActivity || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0)) return;
+    if (operation === "object-edit" && currentObjectSelection.points.length === 0 && !currentObjectSelection.boxPrompt) {
+      setError(tr("画像上をクリックするかBoxで対象物を選択してください。", "Select an object by clicking the image or drawing a box."));
       return;
     }
-    if (operation === "object-edit") {
-      if (!objectRuntime?.installed) {
-        setError(tr("Object Edit runtimeを先にインストールしてください。", "Install the Object Edit runtime first."));
-        return;
-      }
-      if (currentObjectSelection.points.length === 0 && !currentObjectSelection.boxPrompt) {
-        setError(tr("画像上をクリックするかBoxで対象物を選択してください。", "Select an object by clicking the image or drawing a box."));
-        return;
-      }
+    if (operation === "enhance" && scale > 1 && srPreset !== "graphics" && !capabilities) {
+      if (!(await installManagedRuntime())) return;
+    }
+    if (operation === "remove-bg" && !backgroundRuntime?.installed) {
+      if (!(await installBackgroundRuntime())) return;
+    }
+    if (operation === "object-edit" && !objectRuntime?.installed) {
+      if (!(await installObjectRuntime())) return;
     }
     const runFormats: OutputFormat[] = operation === "enhance" && !enhanceCompressionEnabled
       ? ["png"]
@@ -2330,6 +2343,38 @@ export default function App() {
                       onClick={() => setUiPreferences((current) => ({ ...current, autoUpdateEnabled: !current.autoUpdateEnabled }))}
                     ><span aria-hidden="true" /></button>
                   </div>
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head">
+                  <div>
+                    <strong>{tr("AI Runtime", "AI Runtime")}</strong>
+                    <small>{tr("必要なAIモデルはAgent-2Dが自動取得します。TerminalやHomebrewは不要です。", "Agent-2D downloads the AI models it needs. No Terminal or Homebrew setup is required.")}</small>
+                  </div>
+                </div>
+                <div className="runtime-panel">
+                  {runtimeInstallActivity && (
+                    <div className="runtime-install-progress" role="status" aria-live="polite">
+                      <span>{runtimeInstallActivity.label}</span>
+                      <i aria-hidden="true" />
+                    </div>
+                  )}
+                  <div className="runtime-row">
+                    <div><strong>Real-ESRGAN</strong><small>{capabilities?.models.map((model) => model.id).join(" · ") || tr("AI超解像モデル", "AI upscaling models")}</small></div>
+                    <span className={`runtime-state ${capabilities ? "ready" : "missing"}`}>{capabilities ? tr("導入済み", "Installed") : tr("未導入", "Not installed")}</span>
+                    <button type="button" disabled={Boolean(runtimeInstallActivity)} onClick={() => void installManagedRuntime()}>{capabilities ? tr("確認", "Verify") : tr("導入", "Install")}</button>
+                  </div>
+                  <div className="runtime-row">
+                    <div><strong>FeyNoBg</strong><small>{backgroundRuntime?.modelId || tr("背景透過モデル", "Background removal model")}</small></div>
+                    <span className={`runtime-state ${backgroundRuntime?.installed ? "ready" : "missing"}`}>{backgroundRuntime?.installed ? tr("導入済み", "Installed") : tr("未導入", "Not installed")}</span>
+                    <button type="button" disabled={Boolean(runtimeInstallActivity)} onClick={() => void installBackgroundRuntime()}>{backgroundRuntime?.installed ? tr("修復", "Repair") : tr("導入", "Install")}</button>
+                  </div>
+                  <div className="runtime-row">
+                    <div><strong>SAM 2.1 + Big-LaMa</strong><small>{objectRuntime?.installed ? `${objectRuntime.samModelId} · Big-LaMa` : tr("Object Editモデル", "Object Edit models")}</small></div>
+                    <span className={`runtime-state ${objectRuntime?.installed ? "ready" : "missing"}`}>{objectRuntime?.installed ? tr("導入済み", "Installed") : tr("未導入", "Not installed")}</span>
+                    <button type="button" disabled={Boolean(runtimeInstallActivity)} onClick={() => void installObjectRuntime()}>{objectRuntime?.installed ? tr("修復", "Repair") : tr("導入", "Install")}</button>
+                  </div>
+                  <p className="runtime-note">{tr("保存先: ~/Library/Application Support/Agent-2D · 導入後の画像処理はローカルで実行されます。", "Stored in ~/Library/Application Support/Agent-2D · image processing runs locally after installation.")}</p>
                 </div>
               </section>
               <section className="settings-section">
