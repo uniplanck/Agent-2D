@@ -55,7 +55,7 @@ npm run release:app
 Erzeugte App:
 
 ```text
-target/release/bundle/macos/Agent-2D.app
+target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app
 ```
 
 DMG erzeugen:

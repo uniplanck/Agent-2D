@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible problem in Agent-2D
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report a problem. Please avoid including private images, credentials, or secrets.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Open…\n2. Select…\n3. Run…"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent-2D version
+      placeholder: "0.1.1"
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "macOS version, Mac model / architecture"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste a short error message or log excerpt if available. Remove personal data and secrets first.
+      render: shell

@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest a focused improvement to Agent-2D
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What workflow is difficult or missing today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the smallest useful change you would like to see.
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: Affected interface
+      options:
+        - Desktop
+        - CLI
+        - MCP
+        - Shared Rust core
+        - Documentation
+        - Multiple interfaces
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Mockups, examples, alternatives, or constraints. For large changes, please discuss the direction in this Issue before opening a PR.

@@ -1,7 +1,7 @@
 {
   "name": "@agent2d/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -9,12 +9,14 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "tauri": "tauri",
-    "release:app": "tauri build --bundles app",
-    "release:mac": "tauri build --bundles dmg"
+    "release:app": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles app --target aarch64-apple-darwin",
+    "release:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build --bundles dmg --target aarch64-apple-darwin"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   },

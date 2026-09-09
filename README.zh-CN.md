@@ -16,19 +16,23 @@ Agent-2D 是一个面向 Apple Silicon macOS 的本地优先 2D 图像处理引�
 
 Desktop、CLI 与 MCP 共用同一套 Rust 处理核心，因此不同入口不会各自维护一套独立的图像处理实现。
 
+![Agent-2D Desktop](docs/assets/screenshots/agent2d-zh-cn.png)
+
+> 当前应用界面语言为日语/英语；上图为实际 Desktop 界面截图，并非伪造的中文本地化界面。
+
 ## 主要功能
 
 | 功能 | 说明 | 主要引擎 |
 | --- | --- | --- |
-| **Enhance** | 1× / 2× / 4× 超分辨率 | Real-ESRGAN + NCNN/Vulkan |
+| **Enhance** | 1× / 2× / 4× AI 超分辨率，或面向小型 Logo/图标的 Crisp Graphics 缩放；可在增强后继续压缩 | Real-ESRGAN + NCNN/Vulkan / 本地边缘保持缩放 + 共用 Rust pipeline |
 | **Compress** | 保持尺寸的压缩与格式转换 | Rust pipeline + 本地 codec |
-| **Optimize** | 超分辨率后继续压缩 | 共用 Rust pipeline |
-| **Custom** | 指定输出尺寸、构图、缩放、位置、预设与最大文件大小 | 共用 Rust pipeline |
-| **Remove BG** | 高质量透明背景输出 | FeyNoBg + alpha matting |
-| **Object Edit** | 点击/排除点击/框选、透明化、保留选区、自然移除 | SAM 2.1 Base+ + Big-LaMa |
+| **Custom** | 指定输出尺寸、构图、缩放、位置、⅛× / ¼× / ½× / 1× / 2× / 4× 预设与目标文件大小 | 共用 Rust pipeline |
+| **Cutout** | 自动背景移除，或点击/排除点击/框选后的透明化与自然移除 | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | 将 Logo、图标、线稿和扁平插画转换为真实 SVG path | VTracer |
 
-应用还支持 PNG、JPEG、WebP、AVIF、JPEG XL 的相关输入输出路径、多格式同时导出、批量输入、Before / After 对比、多种主题与可编辑快捷键。
+应用还支持 PNG、JPEG、WebP、AVIF、JPEG XL 的主要输入输出路径，TIFF/BMP 可作为可选无损格式使用。Desktop 会隐藏当前机器缺少 codec backend 的格式。原来的独立 Optimize 标签页已经合并到 **Enhance → 增强后压缩**；CLI/MCP 的 `optimize` contract 仍保留兼容性。多格式同时导出、批量输入、Before / After 对比、多种主题与可编辑快捷键均可使用。
+
+仓库顶层保持简洁：`apps/` 放 Desktop，`crates/` 放共用 Rust core/CLI，`mcp/` 放 MCP server，`docs/` 放架构、开发资料与 research，`.github/` 放 Issue/PR 模板和 Release automation。参与开发请先阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ## 运行环境
 
@@ -55,7 +59,7 @@ npm run release:app
 生成的应用位于：
 
 ```text
-target/release/bundle/macos/Agent-2D.app
+target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app
 ```
 
 生成 DMG：
@@ -65,6 +69,10 @@ npm run release:mac
 ```
 
 默认本地构建使用 ad-hoc 签名。若要向第三方分发并避免 Gatekeeper 警告，需要 Developer ID Application 证书与 Apple notarization。
+
+## 更新
+
+Desktop Settings 中提供 **Updates** 区域，可手动检查，也可启用自动更新。更新不会直接执行 GitHub `main` 中的源码，而是只安装 **GitHub Releases 中发布并通过签名验证的 artifact**。Release workflow 位于 [`.github/workflows/release.yml`](.github/workflows/release.yml)。
 
 ## AI runtime
 
@@ -146,6 +154,12 @@ agent2d_capabilities
 ## 本地优先边界
 
 Real-ESRGAN、FeyNoBg、SAM 2.1 与 Big-LaMa 的大型模型文件不会提交到仓库。只有在用户明确执行 runtime 安装后才会从上游来源下载。完成安装后，正常图像处理以本机执行为基本原则。
+
+## 参与贡献
+
+Contributions are welcome. 欢迎 Bug report、Feature request、文档改进，以及范围清晰、便于审查的 Pull Request。较大的功能、架构调整、新 runtime 依赖或 breaking change，请先通过 Issue 讨论方向。
+
+开发环境、测试命令、branch/PR 规则及 label 运用见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。`good first issue` 用于适合首次参与者的边界明确任务，`help wanted` 表示维护者尤其欢迎外部协助。
 
 ## License
 

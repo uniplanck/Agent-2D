@@ -55,7 +55,7 @@ npm run release:app
 생성되는 앱:
 
 ```text
-target/release/bundle/macos/Agent-2D.app
+target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app
 ```
 
 DMG 생성:

@@ -324,7 +324,7 @@ DesktopとMCPのprogress表現を共通化する。
 
 既存研究:
 
-`research/ai-super-resolution/AI_SUPER_RESOLUTION_MODEL_AND_INTEGRATION_RESEARCH.md`
+`docs/research/ai-super-resolution/AI_SUPER_RESOLUTION_MODEL_AND_INTEGRATION_RESEARCH.md`
 
 ## 7.1 v0.1 Backend
 
@@ -762,8 +762,10 @@ model名・codec parameterを最初から大量に見せない。
 
 ```text
 Agent-2D/
-├── DESIGN.md
-├── research/
+├── docs/
+│   ├── DESIGN.md
+│   ├── development/
+│   └── research/
 │   └── ai-super-resolution/
 │       └── AI_SUPER_RESOLUTION_MODEL_AND_INTEGRATION_RESEARCH.md
 │

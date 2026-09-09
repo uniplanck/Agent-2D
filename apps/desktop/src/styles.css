@@ -637,6 +637,22 @@ select:disabled, input:disabled { opacity: 1; border-color: var(--border); backg
 .settings-section-head > div { display: grid; gap: 3px; }
 .settings-section-head strong { color: var(--text-strong); font-size: 13px; }
 .settings-section-head small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.update-card { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 12px; }
+.update-version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.update-version-row span { color: var(--muted); font-size: 9px; }
+.update-version-row strong { color: var(--text-strong); font-size: 12px; font-variant-numeric: tabular-nums; }
+.update-status { min-height: 34px; display: flex; align-items: center; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); color: var(--muted); padding: 8px 10px; font-size: 9px; font-weight: 700; }
+.update-status.current { color: #4f8a6d; }
+.update-status.available { border-color: var(--accent); background: var(--accent-soft); color: var(--text-strong); }
+.update-status.installing, .update-status.checking { color: var(--accent); }
+.update-status.error { color: #b55f68; }
+.update-message { margin: -2px 0 0; color: var(--muted); font-size: 8.5px; line-height: 1.5; }
+.update-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.update-actions button { min-height: 36px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface-soft); color: var(--text); padding: 0 12px; cursor: pointer; font-size: 9.5px; font-weight: 750; }
+.update-actions button:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-hover); color: var(--text-strong); }
+.update-actions button.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+.update-actions button:disabled { opacity: .5; }
+.update-auto-row { margin-top: 2px; }
 .language-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; }
 .language-grid > button { min-width: 0; min-height: 66px; display: grid; align-content: center; gap: 4px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); color: var(--text); padding: 10px 12px; cursor: pointer; text-align: left; }
 .language-grid > button:hover { border-color: var(--border-strong); background: var(--surface-hover); }

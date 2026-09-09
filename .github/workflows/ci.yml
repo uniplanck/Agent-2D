@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust 1.87 (MSRV)
+        uses: dtolnay/rust-toolchain@1.87.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Rust check
+        run: cargo check --workspace
+
+      - name: Rust core tests
+        run: cargo test -p agent2d-core -p agent2d-compression -p agent2d-sr -p agent2d-pipeline -p agent2d-cli
+
+      - name: Desktop checks
+        working-directory: apps/desktop
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: MCP checks
+        working-directory: mcp/server
+        run: |
+          npm ci
+          npm run typecheck
+          npm run build

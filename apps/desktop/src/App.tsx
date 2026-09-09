@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
 import { createPortal } from "react-dom";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import type {
   Agent2DResult,
   BackendCapabilities,
@@ -39,6 +42,7 @@ type SrContentPreset = "general" | "photo" | "illustration" | "ai-art" | "graphi
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
 type AppLanguage = "system" | "ja" | "en";
 type ResolvedLanguage = Exclude<AppLanguage, "system">;
+type UpdateStatus = "idle" | "checking" | "current" | "available" | "installing" | "error";
 type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
 type ShortcutMap = Record<ShortcutAction, string>;
 type OutputNamingTemplates = Record<Operation, string>;
@@ -49,6 +53,7 @@ type UiPreferences = {
   formatVisibility: Record<OutputFormat, boolean>;
   outputNaming: OutputNamingTemplates;
   outputAliasEnabled: boolean;
+  autoUpdateEnabled: boolean;
 };
 type ObjectSelectionSnapshot = {
   points: ObjectPoint[];
@@ -110,7 +115,7 @@ const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string; detailJa: string
 const UI_COPY = {
   ja: {
     settingsTitle: "設定",
-    settingsSubtitle: "外観・言語・出力・命名・ショートカット",
+    settingsSubtitle: "外観・言語・出力・更新・ショートカット",
     language: "言語",
     languageDetail: "Systemを選ぶとmacOSの表示言語に合わせます。",
     theme: "Theme",
@@ -121,6 +126,11 @@ const UI_COPY = {
     outputNamingDetail: "モードごとの自動ファイル名を編集できます。拡張子と複数形式の -png / -jpg 等は自動付与します。",
     outputAlias: "生成画像エイリアス",
     outputAliasDetail: "ONにすると、保存完了後に元画像を複製せず /Users/naomac/Pictures/Agent-2D へ軽量リンクを自動作成します。",
+    updates: "Updates",
+    updatesDetail: "GitHub Releasesの署名済み更新を確認します。自動更新は起動後に確認・適用します。",
+    autoUpdate: "自動更新",
+    checkUpdate: "更新を確認",
+    installUpdate: "更新する",
     shortcuts: "Keyboard Shortcuts",
     shortcutsDetail: "キー欄を押して新しい組み合わせを入力。Delete / Backspaceで解除できます。",
     reset: "初期値へ戻す",
@@ -148,7 +158,7 @@ const UI_COPY = {
   },
   en: {
     settingsTitle: "Settings",
-    settingsSubtitle: "Appearance, language, output, naming & shortcuts",
+    settingsSubtitle: "Appearance, language, output, updates & shortcuts",
     language: "Language",
     languageDetail: "System follows the display language configured in macOS.",
     theme: "Theme",
@@ -159,6 +169,11 @@ const UI_COPY = {
     outputNamingDetail: "Edit the automatic filename template for each mode. Extensions and multi-format tags such as -png / -jpg are added automatically.",
     outputAlias: "Generated image aliases",
     outputAliasDetail: "When enabled, Agent-2D creates a lightweight link in /Users/naomac/Pictures/Agent-2D after each successful save without duplicating the image.",
+    updates: "Updates",
+    updatesDetail: "Check signed updates published through GitHub Releases. Auto update checks and applies them after launch.",
+    autoUpdate: "Automatic updates",
+    checkUpdate: "Check for updates",
+    installUpdate: "Install update",
     shortcuts: "Keyboard Shortcuts",
     shortcutsDetail: "Click a key field and press a new combination. Delete / Backspace clears it.",
     reset: "Reset defaults",
@@ -334,6 +349,7 @@ function loadUiPreferences(): UiPreferences {
     formatVisibility: { ...DEFAULT_FORMAT_VISIBILITY },
     outputNaming: { ...DEFAULT_OUTPUT_NAMING },
     outputAliasEnabled: false,
+    autoUpdateEnabled: true,
   };
   try {
     const raw = window.localStorage.getItem(UI_PREFERENCES_STORAGE_KEY);
@@ -359,6 +375,7 @@ function loadUiPreferences(): UiPreferences {
       formatVisibility,
       outputNaming,
       outputAliasEnabled: parsed.outputAliasEnabled === true,
+      autoUpdateEnabled: parsed.autoUpdateEnabled !== false,
     };
   } catch {
     return fallback;
@@ -954,6 +971,11 @@ function delay(ms: number): Promise<void> {
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(loadUiPreferences);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState("0.1.1");
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
+  const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
+  const [updateMessage, setUpdateMessage] = useState("");
+  const availableUpdateRef = useRef<Awaited<ReturnType<typeof check>>>(null);
   const uiLanguage = resolveLanguage(uiPreferences.language);
   const copy = UI_COPY[uiLanguage];
   const tr = useCallback((ja: string, en: string) => (uiLanguage === "ja" ? ja : en), [uiLanguage]);
@@ -1049,6 +1071,79 @@ export default function App() {
       // UI preferences are optional; image processing must stay usable.
     }
   }, [uiLanguage, uiPreferences]);
+
+  useEffect(() => {
+    void getVersion().then(setAppVersion).catch(() => undefined);
+  }, []);
+
+  const checkForAppUpdate = useCallback(async () => {
+    setUpdateStatus("checking");
+    setUpdateMessage("");
+    try {
+      const update = await check();
+      availableUpdateRef.current = update;
+      if (!update) {
+        setAvailableUpdateVersion("");
+        setUpdateStatus("current");
+        return;
+      }
+      setAvailableUpdateVersion(update.version);
+      setUpdateStatus("available");
+    } catch {
+      availableUpdateRef.current = null;
+      setAvailableUpdateVersion("");
+      setUpdateStatus("error");
+      setUpdateMessage(tr(
+        "更新情報を取得できませんでした。GitHub Releaseがまだ公開されていない可能性があります。",
+        "Could not fetch update metadata. A GitHub Release may not be published yet.",
+      ));
+    }
+  }, [tr]);
+
+  const installAvailableUpdate = useCallback(async () => {
+    const update = availableUpdateRef.current;
+    if (!update) return;
+    setUpdateStatus("installing");
+    setUpdateMessage("");
+    try {
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch {
+      setUpdateStatus("error");
+      setUpdateMessage(tr(
+        "更新のインストールに失敗しました。あとで再度お試しください。",
+        "The update could not be installed. Please try again later.",
+      ));
+    }
+  }, [tr]);
+
+  useEffect(() => {
+    if (!uiPreferences.autoUpdateEnabled) return undefined;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const update = await check();
+          if (cancelled) return;
+          availableUpdateRef.current = update;
+          if (!update) {
+            setUpdateStatus("current");
+            return;
+          }
+          setAvailableUpdateVersion(update.version);
+          setUpdateStatus("installing");
+          await update.downloadAndInstall();
+          if (!cancelled) await relaunch();
+        } catch {
+          if (!cancelled) setUpdateStatus("idle");
+        }
+      })();
+    }, 1800);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [uiPreferences.autoUpdateEnabled]);
 
   useEffect(() => {
     let active = true;
@@ -2197,6 +2292,47 @@ export default function App() {
                       <small>{uiLanguage === "ja" ? language.detailJa : language.detailEn}</small>
                     </button>
                   ))}
+                </div>
+              </section>
+              <section className="settings-section">
+                <div className="settings-section-head">
+                  <div><strong>{copy.updates}</strong><small>{copy.updatesDetail}</small></div>
+                </div>
+                <div className="update-card">
+                  <div className="update-version-row">
+                    <span>{tr("現在のバージョン", "Current version")}</span>
+                    <strong>v{appVersion}</strong>
+                  </div>
+                  <div className={`update-status ${updateStatus}`}>
+                    {updateStatus === "checking" && tr("GitHub Releasesを確認中…", "Checking GitHub Releases…")}
+                    {updateStatus === "current" && tr("最新バージョンです", "You're up to date")}
+                    {updateStatus === "available" && tr(`v${availableUpdateVersion} に更新できます`, `v${availableUpdateVersion} is available`)}
+                    {updateStatus === "installing" && tr(`v${availableUpdateVersion || "latest"} を更新中…`, `Installing v${availableUpdateVersion || "latest"}…`)}
+                    {updateStatus === "error" && tr("更新を確認できませんでした", "Update check failed")}
+                    {updateStatus === "idle" && tr("署名済みGitHub Releaseから更新します", "Updates come from signed GitHub Releases")}
+                  </div>
+                  {updateMessage && <p className="update-message">{updateMessage}</p>}
+                  <div className="update-actions">
+                    <button type="button" onClick={() => void checkForAppUpdate()} disabled={updateStatus === "checking" || updateStatus === "installing"}>
+                      {updateStatus === "checking" ? tr("確認中…", "Checking…") : copy.checkUpdate}
+                    </button>
+                    {updateStatus === "available" && (
+                      <button type="button" className="primary" onClick={() => void installAvailableUpdate()}>{copy.installUpdate}</button>
+                    )}
+                  </div>
+                  <div className={`settings-alias-row update-auto-row ${uiPreferences.autoUpdateEnabled ? "active" : ""}`}>
+                    <div>
+                      <span>{copy.autoUpdate}</span>
+                      <code>{tr("起動後に安全な署名済み更新を確認して適用", "Check and apply signed updates after launch")}</code>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={uiPreferences.autoUpdateEnabled}
+                      className={uiPreferences.autoUpdateEnabled ? "active" : ""}
+                      onClick={() => setUiPreferences((current) => ({ ...current, autoUpdateEnabled: !current.autoUpdateEnabled }))}
+                    >{uiPreferences.autoUpdateEnabled ? "ON" : "OFF"}</button>
+                  </div>
                 </div>
               </section>
               <section className="settings-section">

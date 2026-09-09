@@ -1,6 +1,12 @@
 # Agent-2D
 
 <p align="center">
+  <a href="https://github.com/uniplanck/Agent-2D/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/uniplanck/Agent-2D/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="CONTRIBUTING.md"><img alt="Contributions welcome" src="https://img.shields.io/badge/contributions-welcome-brightgreen.svg"></a>
+</p>
+
+<p align="center">
   <a href="#english"><kbd>English</kbd></a>
   <a href="#japanese"><kbd>日本語</kbd></a>
 </p>
@@ -25,6 +31,8 @@ Agent-2D is a local-first 2D image processing engine for macOS Apple Silicon. It
 
 The same Rust processing core powers the Desktop app, CLI, and MCP server. Image processing does not silently move to a cloud service.
 
+![Agent-2D desktop — English](docs/assets/screenshots/agent2d-en.png)
+
 ### What Agent-2D can do
 
 | Capability | What it does | Main engine |
@@ -46,6 +54,20 @@ All three interfaces use the same core processing contract:
 - **MCP**: TypeScript stdio server
 
 The Desktop and MCP layers do not maintain separate image-processing implementations.
+
+### Repository layout
+
+The public repository is kept deliberately small at the top level:
+
+```text
+apps/      Desktop application
+crates/    Shared Rust core, compression, SR, pipeline, and CLI
+mcp/       MCP stdio server
+docs/      Architecture, development notes, research, and screenshots
+.github/   Contribution templates and release automation
+```
+
+Start with this README for usage, [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflow, and [`docs/README.md`](docs/README.md) for deeper technical notes.
 
 ### Requirements
 
@@ -69,10 +91,10 @@ npm run typecheck
 npm run release:app
 ```
 
-The generated app bundle is created under:
+The generated Apple Silicon app bundle is created under:
 
 ```text
-target/release/bundle/macos/Agent-2D.app
+target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app
 ```
 
 For a DMG build:
@@ -82,6 +104,12 @@ npm run release:mac
 ```
 
 The default local build uses ad-hoc signing. A public macOS binary that opens without Gatekeeper warnings requires a valid Developer ID Application certificate and Apple notarization credentials.
+
+### Updates
+
+The Desktop Settings screen includes an **Updates** section. Manual checks and optional automatic updates use signed artifacts published through **GitHub Releases**. Source commits on `main` are not installed directly: a maintainer publishes a signed release, the app verifies that release metadata, and only then installs the update.
+
+Release packaging is defined in [`.github/workflows/release.yml`](.github/workflows/release.yml). The repository intentionally keeps the updater private signing key out of source control.
 
 ### Optional AI runtimes
 
@@ -209,6 +237,12 @@ The current project validation includes:
 - SAM 2.1 selection, transparent Object Edit, and Big-LaMa erase-and-fill E2E when the runtime is installed
 - MCP stdio acceptance tests
 
+### Contributing
+
+Contributions are welcome. Bug reports, feature requests, documentation improvements, and focused pull requests are appreciated. For substantial features, architecture changes, new runtime dependencies, or breaking behavior, please open an Issue first so the direction can be discussed before implementation.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, validation, branch/PR guidance, and label conventions. Issues labeled [`good first issue`](https://github.com/uniplanck/Agent-2D/labels/good%20first%20issue) are intended as bounded entry points for new contributors; [`help wanted`](https://github.com/uniplanck/Agent-2D/labels/help%20wanted) marks work where outside help is especially useful.
+
 ### License
 
 Agent-2D's own source code is released under the **MIT License**. See [`LICENSE`](LICENSE).
@@ -224,6 +258,8 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 画像処理の機能を増やしていくと、超解像はこのアプリ、圧縮は別ツール、背景透過はWebサービス、物体削除はさらに別のAI、と処理が分散しがちです。Agent-2Dは、その分散をローカルの一つの処理基盤へ戻すためのmacOS向け2D画像エンジンです。
 
 超解像、圧縮・形式変換、サイズと構図の調整、AI背景透過、クリックによる物体編集、SVGベクター化までを一つのアプリにまとめています。Desktop、CLI、MCPは見た目こそ違いますが、内部では同じRustコアを共有します。Desktopだけ別処理、MCPだけ別品質、という分岐を作らない構成です。
+
+![Agent-2D Desktop — 日本語](docs/assets/screenshots/agent2d-ja.png)
 
 ### できること
 
@@ -253,6 +289,8 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 AI AgentからMCPを使う場合も、Desktopとは別の簡易版処理へ落としません。同じ処理契約を別の入口から呼び出します。
 
+リポジトリの入口は `apps/`（Desktop）、`crates/`（共通Rustコア/CLI）、`mcp/`（MCP Server）、`docs/`（設計・開発資料・research）、`.github/`（Issue/PR/Release運用）に整理しています。開発参加時は [`CONTRIBUTING.md`](CONTRIBUTING.md)、技術資料は [`docs/README.md`](docs/README.md) から辿れます。
+
 ### 動作環境
 
 現在の開発・release検証は **Apple Silicon搭載macOS** を基準にしています。
@@ -275,10 +313,10 @@ npm run typecheck
 npm run release:app
 ```
 
-生成されるapp bundle:
+生成されるApple Silicon向けapp bundle:
 
 ```text
-target/release/bundle/macos/Agent-2D.app
+target/aarch64-apple-darwin/release/bundle/macos/Agent-2D.app
 ```
 
 DMGを作る場合:
@@ -288,6 +326,10 @@ npm run release:mac
 ```
 
 通常のローカルbuildはad-hoc署名です。第三者へGatekeeper警告なしで配布するには、Developer ID Application証明書とApple notarizationが別途必要です。
+
+### アップデート
+
+Desktopの設定には **Updates** セクションがあります。手動確認と自動更新はいずれも、GitHubの `main` を直接取得するのではなく、**GitHub Releasesに公開された署名済みartifact** を利用します。これにより、単なるsource更新と実行可能アプリの更新を混同しません。
 
 ### 超解像runtime
 
@@ -400,6 +442,12 @@ agent2d_capabilities
 現行projectでは、PNG/WebP/JXLのexact出力、AVIF/JPEGのpreserve系出力、各形式のinspection/変換、Real-ESRGAN routing、process cancelと途中ファイル削除、native arm64 Desktop build、SVG path検証、FeyNoBg背景透過、SAM 2.1 + Big-LaMa Object Edit、MCP stdio acceptanceまでを検証対象にしています。
 
 AI runtimeが必要なE2Eは、そのruntimeが導入済みの環境で実行します。テストがあることと、すべての外部modelをリポジトリへ同梱していることは別です。
+
+### Contribution
+
+Bug report、Feature request、ドキュメント改善、焦点を絞ったPull Requestを歓迎します。大きな機能追加、architecture変更、新しいruntime依存、breaking changeは、実装前にIssueで方針を相談してください。
+
+開発環境、テスト、branch/PRルール、label運用は [`CONTRIBUTING.md`](CONTRIBUTING.md) にまとめています。`good first issue` は初参加でも内部構造へ深く踏み込まず対応しやすい粒度、`help wanted` は外部実装を特に歓迎する課題として運用します。
 
 ### License
 

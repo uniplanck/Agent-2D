@@ -1,0 +1,23 @@
+name: Documentation improvement
+description: Report unclear, missing, or outdated documentation
+title: "[Docs]: "
+labels: ["documentation"]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      placeholder: "README section, CONTRIBUTING.md, CLI example, etc."
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is unclear or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: A proposed wording or outline is welcome, but not required.
