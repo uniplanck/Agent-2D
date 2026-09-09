@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent2d-cli"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent2d-compression",
  "agent2d-core",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "agent2d-compression"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent2d-core",
  "image",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "agent2d-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "image",
  "serde",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "agent2d-desktop"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent2d-compression",
  "agent2d-core",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "agent2d-pipeline"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent2d-compression",
  "agent2d-core",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "agent2d-sr"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "agent2d-core",
  "image",

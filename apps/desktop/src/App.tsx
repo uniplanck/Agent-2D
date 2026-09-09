@@ -954,7 +954,7 @@ function delay(ms: number): Promise<void> {
 export default function App() {
   const [uiPreferences, setUiPreferences] = useState<UiPreferences>(loadUiPreferences);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [appVersion, setAppVersion] = useState("0.1.1");
+  const [appVersion, setAppVersion] = useState("0.1.2");
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>("idle");
   const [availableUpdateVersion, setAvailableUpdateVersion] = useState("");
   const [updateMessage, setUpdateMessage] = useState("");
@@ -965,6 +965,7 @@ export default function App() {
     (Object.keys(UI_COPY.en) as Array<keyof typeof UI_COPY.en>).map((key) => [key, tr(UI_COPY.ja[key], UI_COPY.en[key])]),
   ) as typeof UI_COPY.en, [tr]);
   const currentShortcutRows = useMemo(() => shortcutRows(uiLanguage), [uiLanguage]);
+  const selectedLanguageOption = LANGUAGE_OPTIONS.find((language) => language.id === uiPreferences.language) ?? LANGUAGE_OPTIONS[0];
   const [operation, setOperation] = useState<Operation>("enhance");
   const [cutoutMode, setCutoutMode] = useState<CutoutMode>("auto");
   const [inputPath, setInputPath] = useState("");
@@ -2264,59 +2265,70 @@ export default function App() {
                 <div className="settings-section-head">
                   <div><strong>{copy.language}</strong><small>{copy.languageDetail}</small></div>
                 </div>
-                <div className="language-grid" role="group" aria-label={copy.language}>
-                  {LANGUAGE_OPTIONS.map((language) => (
-                    <button
-                      key={language.id}
-                      type="button"
-                      className={uiPreferences.language === language.id ? "active" : ""}
-                      aria-pressed={uiPreferences.language === language.id}
-                      onClick={() => setUiPreferences((current) => ({ ...current, language: language.id }))}
+                <div className="language-select-card">
+                  <div className="language-select-wrap">
+                    <select
+                      className="settings-select"
+                      aria-label={copy.language}
+                      value={uiPreferences.language}
+                      onChange={(event) => {
+                        const language = event.currentTarget.value;
+                        if (isAppLanguage(language)) setUiPreferences((current) => ({ ...current, language }));
+                      }}
                     >
-                      <strong>{language.label}</strong>
-                      <small>{tr(language.detailJa, language.detailEn)}</small>
-                    </button>
-                  ))}
+                      {LANGUAGE_OPTIONS.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
+                    </select>
+                    <span className="select-chevron" aria-hidden="true">⌄</span>
+                  </div>
+                  <small className="language-selected-detail">{tr(selectedLanguageOption.detailJa, selectedLanguageOption.detailEn)}</small>
                 </div>
               </section>
               <section className="settings-section">
                 <div className="settings-section-head">
                   <div><strong>{copy.updates}</strong><small>{copy.updatesDetail}</small></div>
                 </div>
-                <div className="update-card">
-                  <div className="update-version-row">
-                    <span>{tr("現在のバージョン", "Current version")}</span>
-                    <strong>v{appVersion}</strong>
+                <div className="update-panel">
+                  <div className="update-main-row">
+                    <div className="update-meta">
+                      <div className="update-version-line">
+                        <strong>Agent-2D</strong>
+                        <span>v{appVersion}</span>
+                      </div>
+                      <div className={`update-status ${updateStatus}`}>
+                        <i aria-hidden="true" />
+                        <span>
+                          {updateStatus === "checking" && tr("GitHub Releasesを確認中…", "Checking GitHub Releases…")}
+                          {updateStatus === "current" && tr("最新バージョンです", "You're up to date")}
+                          {updateStatus === "available" && tr(`v${availableUpdateVersion} に更新できます`, `v${availableUpdateVersion} is available`)}
+                          {updateStatus === "installing" && tr(`v${availableUpdateVersion || "latest"} を更新中…`, `Installing v${availableUpdateVersion || "latest"}…`)}
+                          {updateStatus === "error" && tr("更新を確認できませんでした", "Update check failed")}
+                          {updateStatus === "idle" && tr("署名済みGitHub Releaseから更新します", "Updates come from signed GitHub Releases")}
+                        </span>
+                      </div>
+                      {updateMessage && <p className="update-message">{updateMessage}</p>}
+                    </div>
+                    <div className="update-actions">
+                      <button type="button" onClick={() => void checkForAppUpdate()} disabled={updateStatus === "checking" || updateStatus === "installing"}>
+                        {updateStatus === "checking" ? tr("確認中…", "Checking…") : copy.checkUpdate}
+                      </button>
+                      {updateStatus === "available" && (
+                        <button type="button" className="primary" onClick={() => void installAvailableUpdate()}>{copy.installUpdate}</button>
+                      )}
+                    </div>
                   </div>
-                  <div className={`update-status ${updateStatus}`}>
-                    {updateStatus === "checking" && tr("GitHub Releasesを確認中…", "Checking GitHub Releases…")}
-                    {updateStatus === "current" && tr("最新バージョンです", "You're up to date")}
-                    {updateStatus === "available" && tr(`v${availableUpdateVersion} に更新できます`, `v${availableUpdateVersion} is available`)}
-                    {updateStatus === "installing" && tr(`v${availableUpdateVersion || "latest"} を更新中…`, `Installing v${availableUpdateVersion || "latest"}…`)}
-                    {updateStatus === "error" && tr("更新を確認できませんでした", "Update check failed")}
-                    {updateStatus === "idle" && tr("署名済みGitHub Releaseから更新します", "Updates come from signed GitHub Releases")}
-                  </div>
-                  {updateMessage && <p className="update-message">{updateMessage}</p>}
-                  <div className="update-actions">
-                    <button type="button" onClick={() => void checkForAppUpdate()} disabled={updateStatus === "checking" || updateStatus === "installing"}>
-                      {updateStatus === "checking" ? tr("確認中…", "Checking…") : copy.checkUpdate}
-                    </button>
-                    {updateStatus === "available" && (
-                      <button type="button" className="primary" onClick={() => void installAvailableUpdate()}>{copy.installUpdate}</button>
-                    )}
-                  </div>
-                  <div className={`settings-alias-row update-auto-row ${uiPreferences.autoUpdateEnabled ? "active" : ""}`}>
+                  <div className="update-auto-row">
                     <div>
-                      <span>{copy.autoUpdate}</span>
-                      <code>{tr("起動後に安全な署名済み更新を確認して適用", "Check and apply signed updates after launch")}</code>
+                      <strong>{copy.autoUpdate}</strong>
+                      <small>{tr("起動後に安全な署名済み更新を確認して適用", "Check and apply signed updates after launch")}</small>
                     </div>
                     <button
                       type="button"
                       role="switch"
+                      aria-label={copy.autoUpdate}
                       aria-checked={uiPreferences.autoUpdateEnabled}
-                      className={uiPreferences.autoUpdateEnabled ? "active" : ""}
+                      className={`settings-toggle ${uiPreferences.autoUpdateEnabled ? "active" : ""}`}
                       onClick={() => setUiPreferences((current) => ({ ...current, autoUpdateEnabled: !current.autoUpdateEnabled }))}
-                    >{uiPreferences.autoUpdateEnabled ? "ON" : "OFF"}</button>
+                    ><span aria-hidden="true" /></button>
                   </div>
                 </div>
               </section>
