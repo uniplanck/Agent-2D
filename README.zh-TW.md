@@ -16,6 +16,8 @@ Agent-2D 是一套面向 Apple Silicon macOS 的 local-first 2D 影像處理引�
 
 Desktop、CLI 與 MCP 共用同一套 Rust processing core，因此不同入口不會各自維護另一套影像處理邏輯。
 
+Desktop UI 支援 **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**。選擇 **System** 時，會從 macOS 偏好語言清單中使用第一個受支援的語言。
+
 ## 主要功能
 
 | 功能 | 說明 | 主要引擎 |

@@ -16,6 +16,8 @@ Agent-2D ist eine local-first 2D-Bildverarbeitungs-Engine für macOS auf Apple S
 
 Desktop, CLI und MCP verwenden denselben Rust-Verarbeitungskern. Dadurch gibt es keine getrennten Bildverarbeitungsimplementierungen pro Oberfläche.
 
+Die Desktop-Oberfläche unterstützt **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**. Bei **System** wird die erste unterstützte Sprache aus der macOS-Liste der bevorzugten Sprachen verwendet.
+
 ## Hauptfunktionen
 
 | Funktion | Beschreibung | Haupt-Engine |

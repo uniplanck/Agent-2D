@@ -18,7 +18,7 @@ Desktop、CLI 与 MCP 共用同一套 Rust 处理核心，因此不同入口不�
 
 ![Agent-2D Desktop](docs/assets/screenshots/agent2d-zh-cn.png)
 
-> 当前应用界面语言为日语/英语；上图为实际 Desktop 界面截图，并非伪造的中文本地化界面。
+> Desktop UI 支持 **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**。选择 **System** 时，会从 macOS 的偏好语言列表中使用第一个受支持的语言。
 
 ## 主要功能
 

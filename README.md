@@ -43,7 +43,7 @@ The same Rust processing core powers the Desktop app, CLI, and MCP server. Image
 | **Cutout** | Two sidebar modes: automatic background removal or click/box object editing and erase-and-fill | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | Convert logos, icons, line art, and flat illustrations to real SVG paths | VTracer |
 
-Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The Desktop app automatically hides codec-dependent formats when their required local backend is unavailable. **Optimize is no longer a separate Desktop tab**: use **Enhance → Compress after enhancement** to run the same super-resolution → compression pipeline. The CLI/MCP optimize contract remains available. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, multiple UI themes, and Japanese/English application UI are included.
+Agent-2D uses PNG, JPEG, WebP, AVIF, and JPEG XL as its five primary formats. TIFF and BMP are also supported as optional lossless formats and can be shown or hidden from **Settings → Output Formats**. The Desktop app automatically hides codec-dependent formats when their required local backend is unavailable. **Optimize is no longer a separate Desktop tab**: use **Enhance → Compress after enhancement** to run the same super-resolution → compression pipeline. The CLI/MCP optimize contract remains available. Multi-format export, batch input, Before/After comparison, configurable keyboard shortcuts, and multiple UI themes are included. The Desktop UI supports **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**, and **System** selects the first supported language from the macOS preferred-language list.
 
 ### Interfaces
 
@@ -271,7 +271,7 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 | **Cutout** | サイドバーの2モードから、自動背景透過またはクリック/Box選択・透明化・自然削除を選ぶ | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
 | **Vectorize** | ロゴ・アイコン・線画・フラットイラストをSVG pathへ変換 | VTracer |
 
-主要形式はPNG、JPEG、WebP、AVIF、JPEG XLの5種です。加えてTIFFとBMPをlossless形式として利用でき、**設定 → 出力形式**から表示/非表示を切り替えられます。Desktopでは必要なローカルcodec backendが存在しない形式を自動で非表示にします。**OptimizeはDesktopの独立タブから外し、Enhance内の「圧縮も一緒に実行」に統合**しました。CLI / MCPのoptimize contractは互換性のため残しています。処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もでき、Before / After比較、Theme切替、編集可能なKeyboard Shortcut、日本語/英語UIも利用できます。
+主要形式はPNG、JPEG、WebP、AVIF、JPEG XLの5種です。加えてTIFFとBMPをlossless形式として利用でき、**設定 → 出力形式**から表示/非表示を切り替えられます。Desktopでは必要なローカルcodec backendが存在しない形式を自動で非表示にします。**OptimizeはDesktopの独立タブから外し、Enhance内の「圧縮も一緒に実行」に統合**しました。CLI / MCPのoptimize contractは互換性のため残しています。処理内容に応じて複数形式の同時書き出しや複数画像の一括処理もでき、Before / After比較、Theme切替、編集可能なKeyboard Shortcutを利用できます。Desktop UIは **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)** に対応し、**System**ではmacOSの優先言語リストから最初の対応言語を自動選択します。
 
 ### なぜローカルで動かすのか
 

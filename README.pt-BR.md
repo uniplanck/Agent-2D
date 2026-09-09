@@ -16,6 +16,8 @@ Agent-2D é um motor local-first de processamento de imagens 2D para macOS em Ap
 
 Desktop, CLI e MCP usam o mesmo núcleo de processamento em Rust. Assim, as interfaces não mantêm implementações de imagem independentes com comportamentos diferentes.
 
+A interface Desktop oferece **日本語 / English / 简体中文 / 繁體中文 / 한국어 / Español / Français / Deutsch / Português (Brasil)**. Ao selecionar **System**, é usado o primeiro idioma compatível da lista de idiomas preferidos do macOS.
+
 ## Principais recursos
 
 | Recurso | O que faz | Motor principal |

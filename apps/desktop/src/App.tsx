@@ -7,6 +7,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
+import { LANGUAGE_OPTIONS, isAppLanguage, resolveLanguage, translatePair, type AppLanguage, type ResolvedLanguage } from "./i18n";
 import type {
   Agent2DResult,
   BackendCapabilities,
@@ -40,8 +41,6 @@ type NavOperation = "enhance" | "compress" | "crop" | "cutout" | "vectorize";
 type CutoutMode = "auto" | "object";
 type SrContentPreset = "general" | "photo" | "illustration" | "ai-art" | "graphics";
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
-type AppLanguage = "system" | "ja" | "en";
-type ResolvedLanguage = Exclude<AppLanguage, "system">;
 type UpdateStatus = "idle" | "checking" | "current" | "available" | "installing" | "error";
 type ShortcutAction = "operation1" | "operation2" | "operation3" | "operation4" | "operation5" | "operation6" | "previousOperation" | "nextOperation" | "openImage" | "run" | "objectUndo" | "settings";
 type ShortcutMap = Record<ShortcutAction, string>;
@@ -107,17 +106,12 @@ const THEME_OPTIONS: Array<{ id: AppTheme; name: string; detailJa: string; detai
   { id: "cosmos", name: "Cosmos", detailJa: "深宇宙と発光", detailEn: "Deep space glow", swatches: ["#050713", "#101735", "#8a78ff"] },
   { id: "graphite", name: "Graphite", detailJa: "無彩色ミニマル", detailEn: "Neutral minimal", swatches: ["#111315", "#1c1f23", "#98a3b2"] },
 ];
-const LANGUAGE_OPTIONS: Array<{ id: AppLanguage; label: string; detailJa: string; detailEn: string }> = [
-  { id: "system", label: "System", detailJa: "macOSの言語に合わせる", detailEn: "Follow macOS language" },
-  { id: "ja", label: "日本語", detailJa: "日本語で表示", detailEn: "Display in Japanese" },
-  { id: "en", label: "English", detailJa: "英語で表示", detailEn: "Display in English" },
-];
 const UI_COPY = {
   ja: {
     settingsTitle: "設定",
     settingsSubtitle: "外観・言語・出力・更新・ショートカット",
     language: "言語",
-    languageDetail: "Systemを選ぶとmacOSの表示言語に合わせます。",
+    languageDetail: "Systemを選ぶとmacOSの優先言語から対応言語を自動選択します。",
     theme: "Theme",
     themeDetail: "作業内容は変えず、色・素材感・コントラストだけを切り替えます。",
     outputFormats: "出力形式",
@@ -160,7 +154,7 @@ const UI_COPY = {
     settingsTitle: "Settings",
     settingsSubtitle: "Appearance, language, output, updates & shortcuts",
     language: "Language",
-    languageDetail: "System follows the display language configured in macOS.",
+    languageDetail: "System follows the first supported language in macOS preferences.",
     theme: "Theme",
     themeDetail: "Change color, material feel and contrast without changing the workflow.",
     outputFormats: "Output Formats",
@@ -285,25 +279,16 @@ function isAppTheme(value: unknown): value is AppTheme {
   return THEME_OPTIONS.some((theme) => theme.id === value);
 }
 
-function isAppLanguage(value: unknown): value is AppLanguage {
-  return value === "system" || value === "ja" || value === "en";
-}
-
-function resolveLanguage(language: AppLanguage): ResolvedLanguage {
-  if (language !== "system") return language;
-  return navigator.language.toLowerCase().startsWith("ja") ? "ja" : "en";
-}
-
 function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; label: string; detail: string }> {
-  const ja = language === "ja";
+  const tr = (ja: string, en: string) => translatePair(language, ja, en);
   return [
-    ...NAV_OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${navModeLabel(operation)}`, detail: ja ? "モードへ直接移動" : "Jump directly to this mode" })),
-    { id: "previousOperation", label: ja ? "前のモード" : "Previous mode", detail: ja ? "左隣のタブへ移動" : "Move to the tab on the left" },
-    { id: "nextOperation", label: ja ? "次のモード" : "Next mode", detail: ja ? "右隣のタブへ移動" : "Move to the tab on the right" },
-    { id: "openImage", label: ja ? "画像を開く" : "Open image", detail: ja ? "ファイル選択を開く" : "Open the image picker" },
-    { id: "run", label: ja ? "処理を実行" : "Run", detail: ja ? "現在の設定で開始" : "Start with the current settings" },
-    { id: "objectUndo", label: ja ? "Object Editを戻す" : "Undo Object Edit", detail: ja ? "選択操作を1段階戻す" : "Undo one selection step" },
-    { id: "settings", label: ja ? "設定を開く" : "Open Settings", detail: ja ? "Theme / Shortcut設定" : "Appearance / shortcut settings" },
+    ...NAV_OPERATION_ORDER.map((operation, index) => ({ id: OPERATION_SHORTCUT_ACTIONS[index], label: `${index + 1}. ${navModeLabel(operation)}`, detail: tr("モードへ直接移動", "Jump directly to this mode") })),
+    { id: "previousOperation", label: tr("前のモード", "Previous mode"), detail: tr("左隣のタブへ移動", "Move to the tab on the left") },
+    { id: "nextOperation", label: tr("次のモード", "Next mode"), detail: tr("右隣のタブへ移動", "Move to the tab on the right") },
+    { id: "openImage", label: tr("画像を開く", "Open image"), detail: tr("ファイル選択を開く", "Open the image picker") },
+    { id: "run", label: tr("処理を実行", "Run"), detail: tr("現在の設定で開始", "Start with the current settings") },
+    { id: "objectUndo", label: tr("Object Editを戻す", "Undo Object Edit"), detail: tr("選択操作を1段階戻す", "Undo one selection step") },
+    { id: "settings", label: tr("設定を開く", "Open Settings"), detail: tr("Theme / Shortcut設定", "Appearance / shortcut settings") },
   ];
 }
 
@@ -316,18 +301,11 @@ function navModeLabel(operation: NavOperation): string {
 }
 
 function operationSubtitle(operation: NavOperation, language: ResolvedLanguage): string {
-  if (language === "en") {
-    if (operation === "enhance") return "AI / crisp upscaling";
-    if (operation === "compress") return "Compress & convert";
-    if (operation === "crop") return "Size, crop & target";
-    if (operation === "cutout") return "Auto BG / object edit";
-    return "SVG · illustration / line art";
-  }
-  return operation === "enhance" ? "AI / くっきり超解像"
-    : operation === "compress" ? "超圧縮・変換"
-      : operation === "crop" ? "サイズ・構図・容量"
-        : operation === "cutout" ? "自動透過 / クリック編集"
-          : "SVG化 · イラスト/線画";
+  if (operation === "enhance") return translatePair(language, "AI / くっきり超解像", "AI / crisp upscaling");
+  if (operation === "compress") return translatePair(language, "超圧縮・変換", "Compress & convert");
+  if (operation === "crop") return translatePair(language, "サイズ・構図・容量", "Size, crop & target");
+  if (operation === "cutout") return translatePair(language, "自動透過 / クリック編集", "Auto BG / object edit");
+  return translatePair(language, "SVG化 · イラスト/線画", "SVG · illustration / line art");
 }
 
 function navOperationFor(operation: Operation): NavOperation {
@@ -405,7 +383,7 @@ function matchesShortcut(event: KeyboardEvent, shortcut: string): boolean {
 }
 
 function shortcutDisplay(shortcut: string, language: ResolvedLanguage = "ja"): string {
-  if (!shortcut) return language === "ja" ? "未設定" : "Unassigned";
+  if (!shortcut) return translatePair(language, "未設定", "Unassigned");
   const parts = shortcut.split("+");
   const code = parts.at(-1) ?? "";
   const symbol = code.startsWith("Digit") ? code.slice(5)
@@ -450,10 +428,10 @@ function ShortcutCaptureButton({ value, label, language, onChange }: { value: st
       type="button"
       className={`shortcut-capture ${recording ? "recording" : ""}`}
       data-shortcut-capture-active={recording ? "true" : undefined}
-      aria-label={language === "ja" ? `${label}のショートカットを編集` : `Edit ${label} shortcut`}
+      aria-label={translatePair(language, `${label}のショートカットを編集`, `Edit ${label} shortcut`)}
       onClick={() => setRecording(true)}
     >
-      {recording ? (language === "ja" ? "キー入力…" : "Press keys…") : (value ? shortcutDisplay(value) : language === "ja" ? "未設定" : "Unassigned")}
+      {recording ? translatePair(language, "キー入力…", "Press keys…") : (value ? shortcutDisplay(value, language) : translatePair(language, "未設定", "Unassigned"))}
     </button>
   );
 }
@@ -585,8 +563,8 @@ function NumberStepper({
       />
       {suffix && <span className="number-stepper-suffix">{suffix}</span>}
       <div className="number-stepper-actions" aria-hidden={disabled || undefined}>
-        <button type="button" onClick={() => onChange(normalize(value - step))} disabled={disabled || value <= min} aria-label={language === "ja" ? `${ariaLabel}を減らす` : `Decrease ${ariaLabel}`}>−</button>
-        <button type="button" onClick={() => onChange(normalize(value + step))} disabled={disabled || (max != null && value >= max)} aria-label={language === "ja" ? `${ariaLabel}を増やす` : `Increase ${ariaLabel}`}>＋</button>
+        <button type="button" onClick={() => onChange(normalize(value - step))} disabled={disabled || value <= min} aria-label={translatePair(language, `${ariaLabel}を減らす`, `Decrease ${ariaLabel}`)}>−</button>
+        <button type="button" onClick={() => onChange(normalize(value + step))} disabled={disabled || (max != null && value >= max)} aria-label={translatePair(language, `${ariaLabel}を増やす`, `Increase ${ariaLabel}`)}>＋</button>
       </div>
     </div>
   );
@@ -669,7 +647,7 @@ function SizePresetMenu({
   return (
     <>
       <div className="preset-menu" onMouseEnter={() => { cancelClose(); setOpenState(true); }} onMouseLeave={scheduleClose}>
-        <button ref={buttonRef} type="button" onClick={() => setOpenState((value) => !value)} disabled={disabled} aria-expanded={openState}>{language === "ja" ? "サイズプリセット" : "Size presets"} ▾</button>
+        <button ref={buttonRef} type="button" onClick={() => setOpenState((value) => !value)} disabled={disabled} aria-expanded={openState}>{translatePair(language, "サイズプリセット", "Size presets")} ▾</button>
       </div>
       {openState && createPortal(
         <div
@@ -692,7 +670,7 @@ function SizePresetMenu({
               <button type="button" className="saved-preset-apply" onClick={() => { onApply(preset.width, preset.height); setOpenState(false); }}>
                 <span>{preset.name}</span><small>{preset.width}×{preset.height}</small>
               </button>
-              <button type="button" className="saved-preset-delete" aria-label={language === "ja" ? `${preset.name}を削除` : `Delete ${preset.name}`} onClick={(event) => { event.stopPropagation(); onDelete(preset.id); }}>×</button>
+              <button type="button" className="saved-preset-delete" aria-label={translatePair(language, `${preset.name}を削除`, `Delete ${preset.name}`)} onClick={(event) => { event.stopPropagation(); onDelete(preset.id); }}>×</button>
             </div>
           ))}
         </div>,
@@ -773,7 +751,7 @@ function InfoHint({ title, language, children }: { title: string; language: Reso
         ref={buttonRef}
         type="button"
         className="info-button"
-        aria-label={language === "ja" ? `${title}の説明` : `${title} information`}
+        aria-label={translatePair(language, `${title}の説明`, `${title} information`)}
         aria-expanded={openState}
         aria-controls={popoverId}
         onClick={() => setOpenState((value) => !value)}
@@ -892,34 +870,39 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
 }
 
 function stageLabel(stage: string | undefined, language: ResolvedLanguage): string {
-  const ja = language === "ja";
+  const tr = (ja: string, en: string) => translatePair(language, ja, en);
   switch (stage) {
-    case "queued": return ja ? "準備中" : "Preparing";
-    case "super_resolution": return ja ? "AI超解像" : "AI upscaling";
-    case "super_resolution_then_compression": return ja ? "AI超解像 → 圧縮" : "AI upscaling → compression";
-    case "compression": return ja ? "圧縮 / 変換" : "Compression / conversion";
-    case "conversion_only": return ja ? "解像度維持 / 変換" : "Keep resolution / convert";
-    case "compression_conversion_only": return ja ? "解像度維持 / 圧縮・変換" : "Keep resolution / compress & convert";
-    case "crop_to_size": return ja ? "Custom書き出し" : "Custom export";
-    case "resize_to_size": return ja ? "指定サイズへ縮小" : "Resize to target";
-    case "vectorize_svg": return ja ? "SVGベクター化" : "SVG vectorization";
+    case "queued": return tr("準備中", "Preparing");
+    case "super_resolution": return tr("AI超解像", "AI upscaling");
+    case "super_resolution_then_compression": return tr("AI超解像 → 圧縮", "AI upscaling → compression");
+    case "compression": return tr("圧縮 / 変換", "Compression / conversion");
+    case "conversion_only": return tr("解像度維持 / 変換", "Keep resolution / convert");
+    case "compression_conversion_only": return tr("解像度維持 / 圧縮・変換", "Keep resolution / compress & convert");
+    case "crop_to_size": return tr("Custom書き出し", "Custom export");
+    case "resize_to_size": return tr("指定サイズへ縮小", "Resize to target");
+    case "vectorize_svg": return tr("SVGベクター化", "SVG vectorization");
     case "object_edit_sam2_lama": return "Object Edit · SAM2 / LaMa";
-    case "background_removal_feynobg": return ja ? "FeyNoBg 背景透過" : "FeyNoBg background removal";
-    case "completed": return ja ? "完了" : "Completed";
-    case "cancelling": return ja ? "キャンセル中" : "Cancelling";
-    case "cancelled": return ja ? "キャンセル済み" : "Cancelled";
-    case "failed": return ja ? "失敗" : "Failed";
-    default: return stage || (ja ? "処理中" : "Processing");
+    case "background_removal_feynobg": return tr("FeyNoBg 背景透過", "FeyNoBg background removal");
+    case "completed": return tr("完了", "Completed");
+    case "cancelling": return tr("キャンセル中", "Cancelling");
+    case "cancelled": return tr("キャンセル済み", "Cancelled");
+    case "failed": return tr("失敗", "Failed");
+    default: return stage || tr("処理中", "Processing");
   }
 }
 
 function durationText(ms: number, language: ResolvedLanguage): string {
   const seconds = Math.max(0, Math.ceil(ms / 1000));
-  if (seconds < 60) return language === "ja" ? `${seconds}秒` : `${seconds}s`;
+  const remainder = String(seconds % 60).padStart(2, "0");
+  if (seconds < 60) {
+    if (language === "ja" || language === "zh-CN" || language === "zh-TW") return `${seconds}秒`;
+    if (language === "ko") return `${seconds}초`;
+    return `${seconds}s`;
+  }
   const minutes = Math.floor(seconds / 60);
-  return language === "ja"
-    ? `${minutes}分${String(seconds % 60).padStart(2, "0")}秒`
-    : `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  if (language === "ja" || language === "zh-CN" || language === "zh-TW") return `${minutes}分${remainder}秒`;
+  if (language === "ko") return `${minutes}분 ${remainder}초`;
+  return `${minutes}m ${remainder}s`;
 }
 
 function errorText(error: unknown): string {
@@ -977,8 +960,10 @@ export default function App() {
   const [updateMessage, setUpdateMessage] = useState("");
   const availableUpdateRef = useRef<Awaited<ReturnType<typeof check>>>(null);
   const uiLanguage = resolveLanguage(uiPreferences.language);
-  const copy = UI_COPY[uiLanguage];
-  const tr = useCallback((ja: string, en: string) => (uiLanguage === "ja" ? ja : en), [uiLanguage]);
+  const tr = useCallback((ja: string, en: string) => translatePair(uiLanguage, ja, en), [uiLanguage]);
+  const copy = useMemo(() => Object.fromEntries(
+    (Object.keys(UI_COPY.en) as Array<keyof typeof UI_COPY.en>).map((key) => [key, tr(UI_COPY.ja[key], UI_COPY.en[key])]),
+  ) as typeof UI_COPY.en, [tr]);
   const currentShortcutRows = useMemo(() => shortcutRows(uiLanguage), [uiLanguage]);
   const [operation, setOperation] = useState<Operation>("enhance");
   const [cutoutMode, setCutoutMode] = useState<CutoutMode>("auto");
@@ -1918,9 +1903,9 @@ export default function App() {
       ? Math.max(job?.fraction ?? 0, estimatedFraction)
       : job?.fraction ?? 0;
   const etaText = job?.state === "completed" && result
-    ? (uiLanguage === "ja" ? `所要 ${durationText(result.elapsedMs, uiLanguage)}` : `Elapsed ${durationText(result.elapsedMs, uiLanguage)}`)
+    ? tr(`所要 ${durationText(result.elapsedMs, uiLanguage)}`, `Elapsed ${durationText(result.elapsedMs, uiLanguage)}`)
     : backendRunning && jobTiming
-      ? (uiLanguage === "ja" ? `残り 約${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)}` : `About ${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)} remaining`)
+      ? tr(`残り 約${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)}`, `About ${durationText(Math.max(0, adaptiveTotalMs - elapsedMs), uiLanguage)} remaining`)
       : "";
   const visibleOutputName = outputResults.length > 0
     ? outputResults.map((entry) => basename(entry.outputPath)).join(" · ")
@@ -2289,7 +2274,7 @@ export default function App() {
                       onClick={() => setUiPreferences((current) => ({ ...current, language: language.id }))}
                     >
                       <strong>{language.label}</strong>
-                      <small>{uiLanguage === "ja" ? language.detailJa : language.detailEn}</small>
+                      <small>{tr(language.detailJa, language.detailEn)}</small>
                     </button>
                   ))}
                 </div>
@@ -2351,7 +2336,7 @@ export default function App() {
                       <span className="theme-swatches" aria-hidden="true">
                         {theme.swatches.map((color) => <i key={color} style={{ background: color }} />)}
                       </span>
-                      <span className="theme-copy"><strong>{theme.name}</strong><small>{uiLanguage === "ja" ? theme.detailJa : theme.detailEn}</small></span>
+                      <span className="theme-copy"><strong>{theme.name}</strong><small>{tr(theme.detailJa, theme.detailEn)}</small></span>
                     </button>
                   ))}
                 </div>
@@ -2392,7 +2377,7 @@ export default function App() {
                 <div className="naming-template-grid">
                   {OUTPUT_NAMING_ROWS.map((row) => (
                     <label className="naming-template-row" key={row.id}>
-                      <span><strong>{row.label}</strong><small>{uiLanguage === "ja" ? row.detailJa : row.detailEn}</small></span>
+                      <span><strong>{row.label}</strong><small>{tr(row.detailJa, row.detailEn)}</small></span>
                       <input
                         value={uiPreferences.outputNaming[row.id]}
                         onChange={(event) => setUiPreferences((current) => ({
