@@ -21,6 +21,7 @@ use vtracer::progress::CancelToken as VectorCancelToken;
 
 mod background;
 mod object_edit;
+mod restoration;
 pub use background::{
     BACKGROUND_MODEL_ID, BACKGROUND_MODEL_REVISION, BACKGROUND_NOBG_VERSION,
     BACKGROUND_RUNTIME_RELEASE_ID, BACKGROUND_TORCH_VERSION, BackgroundRuntimeStatus,
@@ -32,6 +33,12 @@ pub use object_edit::{
     OBJECT_SAM_MODEL_REVISION, ObjectEditRuntimeStatus, edit_object, edit_object_with_cancel,
     install_object_edit_runtime, object_edit_runtime_status, segment_object_mask,
     segment_object_mask_with_cancel, warm_object_edit_runtime,
+};
+pub use restoration::{
+    GFPGAN_MODEL_ID, GFPGAN_MODEL_URL, NAFNET_DEBLUR_MODEL_ID, NAFNET_DEBLUR_MODEL_URL,
+    NAFNET_DENOISE_MODEL_ID, NAFNET_DENOISE_MODEL_URL, RESTORATION_RUNTIME_RELEASE_ID,
+    RestorationRuntimeStatus, install_restoration_runtime, restoration_runtime_status,
+    restore_image, restore_image_with_cancel,
 };
 
 fn crop_geometry(

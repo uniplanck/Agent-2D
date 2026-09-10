@@ -24,13 +24,14 @@ Normale Apple-Silicon-Mac-Nutzer laden **[Agent-2D-macOS-arm64.zip](https://gith
 
 Die App ist derzeit nicht von Apple notarized. Falls macOS den ersten Start blockiert, verwenden Sie **Control/Rechtsklick auf Agent-2D.app → Öffnen**. Falls sie weiterhin blockiert wird: **Systemeinstellungen → Datenschutz & Sicherheit → Dennoch öffnen**. Terminal-Befehle sind nicht nötig.
 
-Beim ersten Einsatz von Enhance, Cutout oder Object Edit richtet Agent-2D Real-ESRGAN, FeyNoBg, SAM 2.1 und Big-LaMa selbst ein. Unter **Settings → AI Runtime** lassen sich Status sowie Install / Repair steuern. Danach läuft die Bildverarbeitung lokal.
+Beim ersten Einsatz von Enhance, Restore, Cutout oder Object Edit richtet Agent-2D Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa, GFPGAN und NAFNet selbst ein. Unter **Settings → AI Runtime** lassen sich Status sowie Install / Repair steuern. Danach läuft die Bildverarbeitung lokal.
 
 ## Hauptfunktionen
 
 | Funktion | Beschreibung | Haupt-Engine |
 | --- | --- | --- |
 | **Enhance** | 1× / 2× / 4× Super Resolution | Real-ESRGAN + NCNN/Vulkan |
+| **Restore** | Repariert degradierte Gesichter, reduziert Bildrauschen oder Bewegungsunschärfe bei unveränderten Abmessungen | GFPGAN v1.4 / NAFNet SIDD / NAFNet GoPro |
 | **Compress** | Komprimierung und Formatkonvertierung bei gleicher Auflösung | Rust-Pipeline + lokale Codecs |
 | **Optimize** | Super Resolution mit anschließender Komprimierung | gemeinsame Rust-Pipeline |
 | **Custom** | Exakte Ausgabegröße, Ausschnitt, Zoom, Position, Presets und optionale Dateigrößengrenze | gemeinsame Rust-Pipeline |

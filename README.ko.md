@@ -24,13 +24,14 @@ Desktop UI는 **日本語 / English / 简体中文 / 繁體中文 / 한국어 / 
 
 현재 Apple notarization은 적용하지 않았습니다. macOS가 첫 실행을 차단하면 **Control/오른쪽 클릭 Agent-2D.app → 열기**를 사용하고, 계속 차단되면 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**를 사용하세요. Terminal 명령은 필요하지 않습니다.
 
-Enhance / Cutout / Object Edit 같은 AI 기능을 처음 사용할 때 Agent-2D가 Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa를 직접 준비합니다. **Settings → AI Runtime**에서도 상태 확인과 Install / Repair가 가능합니다. 설치 후 이미지 처리는 로컬에서 실행됩니다.
+Enhance / Restore / Cutout / Object Edit 같은 AI 기능을 처음 사용할 때 Agent-2D가 Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa, GFPGAN, NAFNet을 직접 준비합니다. **Settings → AI Runtime**에서도 상태 확인과 Install / Repair가 가능합니다. 설치 후 이미지 처리는 로컬에서 실행됩니다.
 
 ## 주요 기능
 
 | 기능 | 설명 | 주요 엔진 |
 | --- | --- | --- |
 | **Enhance** | 1× / 2× / 4× 초해상도 | Real-ESRGAN + NCNN/Vulkan |
+| **Restore** | 손상된 얼굴 복원, 사진 노이즈 제거, 모션 블러 감소를 해상도 유지 상태로 수행 | GFPGAN v1.4 / NAFNet SIDD / NAFNet GoPro |
 | **Compress** | 해상도를 유지한 압축 및 포맷 변환 | Rust pipeline + 로컬 codec |
 | **Optimize** | 초해상도 후 압축 | 공통 Rust pipeline |
 | **Custom** | 출력 크기, 구도, Zoom, 위치, Preset, 최대 파일 크기 | 공통 Rust pipeline |

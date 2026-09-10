@@ -33,7 +33,7 @@ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; marg
 .runtime-install { min-height: 34px; border: 1px solid rgba(224,177,84,.35); background: rgba(224,177,84,.09); color: #e8cf9b; border-radius: 999px; padding: 6px 11px; font-size: 9px; font-weight: 700; letter-spacing: .02em; }
 .runtime-install:hover:not(:disabled) { background: rgba(224,177,84,.16); }
 
-.mode-tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; padding: 4px; border: 1px solid rgba(40,54,74,.72); border-radius: 13px; background: rgba(8, 12, 19, .72); }
+.mode-tabs { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 4px; border: 1px solid rgba(40,54,74,.72); border-radius: 13px; background: rgba(8, 12, 19, .72); }
 .mode-tabs button { min-height: 48px; border: 1px solid transparent; border-radius: 9px; background: transparent; cursor: pointer; color: #8998af; font-size: 12px; font-weight: 700; transition: 140ms ease; }
 .mode-tabs button small { display: block; margin-top: 2px; color: #607089; font-size: 9px; font-weight: 600; letter-spacing: .04em; }
 .mode-tabs button:hover:not(:disabled) { background: rgba(255,255,255,.025); color: #a8b6cc; }
@@ -344,6 +344,19 @@ select:disabled, input:disabled { opacity: .65; }
 .app-shell.dragging .workspace-grid, .app-shell.dragging .mode-tabs, .app-shell.dragging .runtime-alert { filter: saturate(.7) brightness(.72); }
 
 .object-runtime-card { display: grid; gap: 7px; padding: 9px 10px; border: 1px solid #263751; border-radius: 10px; background: linear-gradient(155deg, rgba(20,34,54,.72), rgba(8,14,23,.84)); }
+.restore-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.restore-card.ready { border-color: var(--border-strong); background: var(--surface-soft); }
+.restore-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.restore-head > div { display: grid; gap: 3px; min-width: 0; }
+.restore-head strong { color: var(--text-strong); font-size: 11px; }
+.restore-head div span { color: var(--muted); font-size: 8px; line-height: 1.45; }
+.restore-mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.restore-mode-grid button { display: grid; gap: 2px; min-width: 0; padding: 9px 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-soft); color: var(--muted); text-align: left; cursor: pointer; }
+.restore-mode-grid button strong { color: inherit; font-size: 9px; }
+.restore-mode-grid button small { color: var(--muted-2); font-size: 7px; }
+.restore-mode-grid button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--text-strong); box-shadow: 0 0 0 2px var(--focus); }
+.restore-mode-grid button.active small { color: var(--accent); }
+.restore-mode-grid button:disabled { cursor: default; opacity: .7; }
 .object-control-card { display: grid; gap: 10px; padding: 0; border: 0; background: transparent; }
 .object-runtime-card.ready { border-color: rgba(84,153,136,.28); background: rgba(14,25,35,.68); }
 .object-runtime-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -422,7 +435,7 @@ select:disabled, input:disabled { opacity: .65; }
   .source-multiplier-input { grid-column: 1 / 4; }
   .source-multiplier-tools > button:last-child { grid-column: 4; }
   .app-shell { padding: 14px; }
-  .mode-tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
+  .mode-tabs { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
   .mode-tabs button { min-width: 0; padding-inline: 4px; font-size: 11px; }
   .mode-tabs button small { font-size: 8px; }
   .workspace-grid { grid-template-columns: 292px 1fr; }

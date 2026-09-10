@@ -14,16 +14,18 @@ use agent2d_core::{
     Agent2DError, Agent2DResult, BackgroundRemovalRequest, CancellationToken, CompressRequest,
     CompressionMode, CompressionOptions, CustomRequest, ErrorPayload, InspectRequest, InspectResult,
     JobState, ObjectEditAction, ObjectEditRequest, ObjectSelection, ObjectSelectionRequest,
-    ObjectSelectionResult, OptimizeRequest, OutputFormat, SuperResolutionMode, SuperResolutionPreset,
-    UpscaleOptions, UpscaleRequest, UpscaleScale, VectorizeDetail, VectorizePreset, VectorizeRequest,
+    ObjectSelectionResult, OptimizeRequest, OutputFormat, RestoreMode, RestoreRequest,
+    SuperResolutionMode, SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale,
+    VectorizeDetail, VectorizePreset, VectorizeRequest,
     backend_available, backend_command_path, cleanup_output, inspect_image, validate_output_path,
 };
 use agent2d_pipeline::{
-    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, background_runtime_status,
-    custom_image_with_cancel, edit_object_with_cancel, install_background_runtime,
-    install_object_edit_runtime, object_edit_runtime_status, optimize_image_with_cancel,
-    remove_background_with_cancel, segment_object_mask, vectorize_image_with_cancel,
-    warm_object_edit_runtime,
+    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, RestorationRuntimeStatus,
+    background_runtime_status, custom_image_with_cancel, edit_object_with_cancel,
+    install_background_runtime, install_object_edit_runtime, install_restoration_runtime,
+    object_edit_runtime_status, optimize_image_with_cancel, remove_background_with_cancel,
+    restoration_runtime_status, restore_image_with_cancel, segment_object_mask,
+    vectorize_image_with_cancel, warm_object_edit_runtime,
 };
 use agent2d_sr::{SrCapabilities, capabilities, install_runtime, upscale_image_with_cancel};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -61,6 +63,7 @@ enum DesktopOperation {
     RemoveBg,
     #[serde(rename = "object-edit")]
     ObjectEdit,
+    Restore,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +90,7 @@ struct DesktopJobRequest {
     vector_threshold: Option<u8>,
     object_action: Option<ObjectEditAction>,
     object_selection: Option<ObjectSelection>,
+    restore_mode: Option<RestoreMode>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -522,6 +526,18 @@ fn execute_job(
             },
             cancellation,
         ),
+        DesktopOperation::Restore => restore_image_with_cancel(
+            &RestoreRequest {
+                input_path,
+                output_path,
+                mode: request.restore_mode.ok_or_else(|| Agent2DError::UnsupportedCompression {
+                    mode: "restore".into(),
+                    format: "restore_mode_required".into(),
+                })?,
+                format,
+            },
+            cancellation,
+        ),
     }
 }
 
@@ -606,6 +622,19 @@ async fn install_object_edit_runtime_command() -> Result<ObjectEditRuntimeStatus
     tauri::async_runtime::spawn_blocking(install_object_edit_runtime)
         .await
         .map_err(|error| internal_error(format!("object edit runtime installer task failed: {error}")))?
+        .map_err(|error| error.payload())
+}
+
+#[tauri::command]
+fn restoration_runtime_status_command() -> Result<RestorationRuntimeStatus, ErrorPayload> {
+    restoration_runtime_status().map_err(|error| error.payload())
+}
+
+#[tauri::command]
+async fn install_restoration_runtime_command() -> Result<RestorationRuntimeStatus, ErrorPayload> {
+    tauri::async_runtime::spawn_blocking(install_restoration_runtime)
+        .await
+        .map_err(|error| internal_error(format!("restoration runtime installer task failed: {error}")))?
         .map_err(|error| error.payload())
 }
 
@@ -897,6 +926,7 @@ fn start_job_command(
                 (DesktopOperation::Vectorize, _) => "vectorize_svg",
                 (DesktopOperation::RemoveBg, _) => "background_removal_feynobg",
                 (DesktopOperation::ObjectEdit, _) => "object_edit_sam2_lama",
+                (DesktopOperation::Restore, _) => "restoration_gfpgan_nafnet",
             }
             .into();
         });
@@ -1000,6 +1030,8 @@ pub fn run() {
             install_background_runtime_command,
             object_edit_runtime_status_command,
             install_object_edit_runtime_command,
+            restoration_runtime_status_command,
+            install_restoration_runtime_command,
             warm_object_edit_runtime_command,
             object_mask_preview_command,
             preview_image_command,

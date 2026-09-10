@@ -1,6 +1,6 @@
 # Agent-2D Third-Party Notices
 
-Updated: 2026-09-09
+Updated: 2026-09-10
 
 This document records the main third-party boundaries used by Agent-2D v0.1. It is an engineering inventory, not legal advice.
 
@@ -87,6 +87,34 @@ Agent-2D's `Object Edit` operation uses Meta's SAM 2.1 Base+ for interactive poi
 - Wrapper release source: https://github.com/enesmsahin/simple-lama-inpainting
 
 Normal SAM inference is configured with Hugging Face offline mode after installation. The local implementation loads Big-LaMa directly as a TorchScript checkpoint rather than adding OpenCV or the full simple-lama-inpainting Python package. Before redistributing SAM or LaMa model files in a public Agent-2D package, verify the exact checkpoint terms and include the applicable license and notice material.
+
+## GFPGAN v1.4 face restoration
+
+Agent-2D's `Restore → Face` operation uses TencentARC GFPGAN v1.4. The checkpoint and Python support packages are not embedded in the general-user ZIP; Agent-2D downloads them into its managed Application Support runtime on first use or when Install/Repair is selected.
+
+- Project: `TencentARC/GFPGAN`
+- Model: `GFPGANv1.4.pth`
+- Upstream repository license: Apache-2.0
+- Repository: https://github.com/TencentARC/GFPGAN
+- Checkpoint source: https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth
+- Pinned checkpoint SHA-256: `e2cd4703ab14f4d01fd1383a8a8b266f9a5833dacee8e6a79d3bf21a1b6be5ad`
+- Python package: `gfpgan` `1.3.8`, with BasicSR / FaceXLib and their transitive dependencies installed into the Agent-2D-managed runtime.
+
+The current integration keeps output dimensions unchanged (`upscale=1`) and uses GFPGAN only for detected face restoration. Review the exact model/checkpoint terms again before any future release that embeds the weights directly instead of downloading them on demand.
+
+## NAFNet image restoration
+
+Agent-2D's `Restore → Denoise` and `Restore → Deblur` operations use the official NAFNet width-32 checkpoints. They are downloaded on demand into the managed restoration runtime and verified by SHA-256 before use.
+
+- Project: `megvii-research/NAFNet`
+- Upstream repository license: MIT
+- Repository: https://github.com/megvii-research/NAFNet
+- Denoise checkpoint: `NAFNet-SIDD-width32.pth`
+- Pinned denoise SHA-256: `89c70e808d1783b6c07911306e106aaf0d4f7f3da8c61078b99ff7f8929a26f4`
+- Deblur checkpoint: `NAFNet-GoPro-width32.pth`
+- Pinned deblur SHA-256: `19394e6155d12ef6371d1d57496f87f0ec88f92bdffa27c0792690722d5d1a5c`
+
+Agent-2D carries a small compatible NAFNet inference definition in the managed runner while the trained weights remain external runtime assets. If another Agent-2D managed Python/PyTorch runtime is already installed it is reused; otherwise Restore prepares its own managed portable Python/PyTorch runtime. Inference runs locally after installation.
 
 ## Tauri and Rust/JavaScript dependencies
 

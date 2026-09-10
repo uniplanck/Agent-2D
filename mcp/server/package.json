@@ -1,6 +1,6 @@
 {
   "name": "@agent2d/mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "license": "MIT",
   "private": true,
   "type": "module",

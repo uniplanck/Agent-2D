@@ -25,6 +25,8 @@ import type {
   ObjectSelection,
   Operation,
   OutputFormat,
+  RestorationRuntimeStatus,
+  RestoreMode,
   SrCapabilities,
   SrMode,
 } from "./types";
@@ -37,7 +39,7 @@ type QueueState = "pending" | "running" | "completed" | "failed" | "cancelled";
 type VectorPreset = "illustration" | "logo" | "line-art";
 type VectorDetail = "clean" | "balanced" | "detailed";
 type ObjectTool = "include" | "exclude" | "box" | "pan";
-type NavOperation = "enhance" | "compress" | "crop" | "cutout" | "vectorize";
+type NavOperation = "enhance" | "restore" | "compress" | "crop" | "cutout" | "vectorize";
 type CutoutMode = "auto" | "object";
 type SrContentPreset = "general" | "photo" | "illustration" | "ai-art" | "graphics";
 type AppTheme = "lumiere" | "sorbet" | "linen" | "petale" | "versailles" | "nocturne" | "cosmos" | "graphite";
@@ -80,7 +82,7 @@ interface FormatComparisonOutput {
 
 const CUSTOM_SIZE_STORAGE_KEY = "agent2d.custom-size-presets.v1";
 const UI_PREFERENCES_STORAGE_KEY = "agent2d.ui-preferences.v1";
-const NAV_OPERATION_ORDER: NavOperation[] = ["enhance", "compress", "crop", "cutout", "vectorize"];
+const NAV_OPERATION_ORDER: NavOperation[] = ["enhance", "restore", "compress", "crop", "cutout", "vectorize"];
 const OPERATION_SHORTCUT_ACTIONS: ShortcutAction[] = ["operation1", "operation2", "operation3", "operation4", "operation5", "operation6"];
 const DEFAULT_SHORTCUTS: ShortcutMap = {
   operation1: "Meta+Digit1",
@@ -222,6 +224,7 @@ const DEFAULT_FORMAT_VISIBILITY: Record<OutputFormat, boolean> = {
 };
 const DEFAULT_OUTPUT_NAMING: OutputNamingTemplates = {
   enhance: "{name}-agent2d-enhanced",
+  restore: "{name}-agent2d-restored",
   compress: "{name}-agent2d-compressed",
   optimize: "{name}-agent2d-optimized",
   crop: "{name}-agent2d-custom",
@@ -232,6 +235,7 @@ const DEFAULT_OUTPUT_NAMING: OutputNamingTemplates = {
 };
 const OUTPUT_NAMING_ROWS: Array<{ id: Operation; label: string; detailJa: string; detailEn: string }> = [
   { id: "enhance", label: "Enhance", detailJa: "AI / Crisp超解像", detailEn: "AI / Crisp upscale" },
+  { id: "restore", label: "Restore", detailJa: "顔復元 / ノイズ・ブレ補正", detailEn: "Face / denoise / deblur" },
   { id: "compress", label: "Compress", detailJa: "圧縮・変換", detailEn: "Compress / convert" },
   { id: "crop", label: "Custom · Crop", detailJa: "構図つきCustom出力", detailEn: "Custom framed output" },
   { id: "resize", label: "Custom · Resize", detailJa: "指定サイズ縮小", detailEn: "Resize to target" },
@@ -294,6 +298,7 @@ function shortcutRows(language: ResolvedLanguage): Array<{ id: ShortcutAction; l
 
 function navModeLabel(operation: NavOperation): string {
   if (operation === "enhance") return "Enhance";
+  if (operation === "restore") return "Restore";
   if (operation === "compress") return "Compress";
   if (operation === "crop") return "Custom";
   if (operation === "cutout") return "Cutout";
@@ -302,6 +307,7 @@ function navModeLabel(operation: NavOperation): string {
 
 function operationSubtitle(operation: NavOperation, language: ResolvedLanguage): string {
   if (operation === "enhance") return translatePair(language, "AI / くっきり超解像", "AI / crisp upscaling");
+  if (operation === "restore") return translatePair(language, "顔・ノイズ・ブレ修復", "Face · denoise · deblur");
   if (operation === "compress") return translatePair(language, "超圧縮・変換", "Compress & convert");
   if (operation === "crop") return translatePair(language, "サイズ・構図・容量", "Size, crop & target");
   if (operation === "cutout") return translatePair(language, "自動透過 / クリック編集", "Auto BG / object edit");
@@ -787,6 +793,7 @@ function bytes(value?: number | null): string {
 
 function operationOutputSuffix(operation: Operation): string {
   if (operation === "enhance") return "enhanced";
+  if (operation === "restore") return "restored";
   if (operation === "compress") return "compressed";
   if (operation === "crop") return "custom";
   if (operation === "resize") return "resized";
@@ -862,6 +869,7 @@ function estimateDurationMs(info: InspectResult, operation: Operation, scale: 1 
   if (operation === "vectorize") return 1_100 + megapixels * 1_850;
   if (operation === "remove-bg") return 3_500 + megapixels * 2_400;
   if (operation === "object-edit") return 5_000 + megapixels * 4_500;
+  if (operation === "restore") return 4_000 + megapixels * 5_000;
   if (operation === "compress" || scale === 1) return compressionMs;
   const srMs = scale === 4
     ? 2_800 + megapixels * 12_500
@@ -883,6 +891,7 @@ function stageLabel(stage: string | undefined, language: ResolvedLanguage): stri
     case "vectorize_svg": return tr("SVGベクター化", "SVG vectorization");
     case "object_edit_sam2_lama": return "Object Edit · SAM2 / LaMa";
     case "background_removal_feynobg": return tr("FeyNoBg 背景透過", "FeyNoBg background removal");
+    case "restoration_gfpgan_nafnet": return tr("AI画像修復", "AI restoration");
     case "completed": return tr("完了", "Completed");
     case "cancelling": return tr("キャンセル中", "Cancelling");
     case "cancelled": return tr("キャンセル済み", "Cancelled");
@@ -916,6 +925,7 @@ function errorText(error: unknown): string {
 
 function modeLabel(mode: Operation): string {
   if (mode === "enhance") return "Enhance";
+  if (mode === "restore") return "Restore";
   if (mode === "compress") return "Compress";
   if (mode === "crop") return "Custom";
   if (mode === "resize") return "Resize to Size";
@@ -1022,7 +1032,11 @@ export default function App() {
   const [objectRuntime, setObjectRuntime] = useState<ObjectEditRuntimeStatus | null>(null);
   const [objectRuntimeChecked, setObjectRuntimeChecked] = useState(false);
   const [installingObjectRuntime, setInstallingObjectRuntime] = useState(false);
-  const [runtimeInstallActivity, setRuntimeInstallActivity] = useState<{ kind: "sr" | "background" | "object"; label: string } | null>(null);
+  const [restorationRuntime, setRestorationRuntime] = useState<RestorationRuntimeStatus | null>(null);
+  const [restorationRuntimeChecked, setRestorationRuntimeChecked] = useState(false);
+  const [installingRestorationRuntime, setInstallingRestorationRuntime] = useState(false);
+  const [restoreMode, setRestoreMode] = useState<RestoreMode>("face");
+  const [runtimeInstallActivity, setRuntimeInstallActivity] = useState<{ kind: "sr" | "background" | "object" | "restoration"; label: string } | null>(null);
   const [objectRuntimeWarming, setObjectRuntimeWarming] = useState(false);
   const [objectTool, setObjectTool] = useState<ObjectTool>("include");
   const [objectPoints, setObjectPoints] = useState<ObjectPoint[]>([]);
@@ -1303,6 +1317,21 @@ export default function App() {
     void refreshObjectRuntime();
   }, [refreshObjectRuntime]);
 
+  const refreshRestorationRuntime = useCallback(async () => {
+    try {
+      const next = await invoke<RestorationRuntimeStatus>("restoration_runtime_status_command");
+      setRestorationRuntime(next);
+    } catch {
+      setRestorationRuntime(null);
+    } finally {
+      setRestorationRuntimeChecked(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshRestorationRuntime();
+  }, [refreshRestorationRuntime]);
+
   useEffect(() => {
     if (operation !== "object-edit" || !objectRuntime?.installed) return;
     let active = true;
@@ -1398,6 +1427,26 @@ export default function App() {
       return false;
     } finally {
       setInstallingObjectRuntime(false);
+      setRuntimeInstallActivity(null);
+    }
+  };
+
+  const installRestorationRuntime = async (): Promise<boolean> => {
+    if (installingRestorationRuntime) return false;
+    setInstallingRestorationRuntime(true);
+    setRuntimeInstallActivity({ kind: "restoration", label: tr("GFPGAN / NAFNetを準備中…", "Preparing GFPGAN / NAFNet…") });
+    setError("");
+    try {
+      const next = await invoke<RestorationRuntimeStatus>("install_restoration_runtime_command");
+      setRestorationRuntime(next);
+      setRestorationRuntimeChecked(true);
+      await refreshBackgroundRuntime();
+      return true;
+    } catch (cause) {
+      setError(errorText(cause));
+      return false;
+    } finally {
+      setInstallingRestorationRuntime(false);
       setRuntimeInstallActivity(null);
     }
   };
@@ -1643,6 +1692,7 @@ export default function App() {
       vectorThreshold: null,
       objectAction: operation === "object-edit" ? objectAction : null,
       objectSelection: operation === "object-edit" ? currentObjectSelection : null,
+      restoreMode: operation === "restore" ? restoreMode : null,
     };
     try {
       const timingInfo = await invoke<InspectResult>("inspect_image_command", { path });
@@ -1699,7 +1749,7 @@ export default function App() {
         error: { code: "desktop_request_error", message: errorText(cause) },
       };
     }
-  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, enhanceCompressionEnabled, enhanceTargetBytes, modelId, objectAction, operation, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
+  }, [cropX, cropY, cropZoom, currentObjectSelection, customTargetBytes, enhanceCompressionEnabled, enhanceTargetBytes, modelId, objectAction, operation, restoreMode, scale, srMode, srPreset, targetHeight, targetWidth, tr, uiPreferences.outputAliasEnabled, vectorDetail, vectorMaxColors, vectorPreset]);
 
   const start = async () => {
     if (running || runtimeInstallActivity || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0)) return;
@@ -1715,6 +1765,9 @@ export default function App() {
     }
     if (operation === "object-edit" && !objectRuntime?.installed) {
       if (!(await installObjectRuntime())) return;
+    }
+    if (operation === "restore" && !restorationRuntime?.installed) {
+      if (!(await installRestorationRuntime())) return;
     }
     const runFormats: OutputFormat[] = operation === "enhance" && !enhanceCompressionEnabled
       ? ["png"]
@@ -1894,6 +1947,12 @@ export default function App() {
       ? tr("FeyNoBgで前景のalpha matteを推定し、元のピクセル寸法を保った透過画像を書き出します。PNG / WebPのみ対応します。", "FeyNoBg estimates a foreground alpha matte and exports transparency while preserving the original pixel dimensions. PNG and WebP are supported.")
     : operation === "object-edit"
       ? tr("SAM 2.1 Base+で任意物体をクリック選択し、maskを±/Featherで調整。透明化はSAMのみ、自然削除はLaMaで背景を復元します。", "Select any object with SAM 2.1 Base+, then adjust the mask with expand/contract and feathering. Transparency uses the SAM mask; natural removal uses LaMa to reconstruct the background.")
+    : operation === "restore"
+      ? (restoreMode === "face"
+        ? tr("GFPGAN v1.4で画像内の顔を検出して復元します。画像サイズは維持し、顔以外の領域は極力そのまま残します。", "GFPGAN v1.4 detects and restores faces while preserving the image dimensions and leaving non-face regions largely unchanged.")
+        : restoreMode === "denoise"
+          ? tr("NAFNet SIDDで写真のセンサーノイズやざらつきを低減します。", "NAFNet SIDD reduces sensor noise and grain in photos.")
+          : tr("NAFNet GoProでモーションブラーや軽い手ブレを補正します。", "NAFNet GoPro reduces motion blur and mild camera shake."))
     : operation === "enhance" && srPreset === "graphics" && scale > 1
       ? tr("Crisp Graphicsは写真向けAI補完を使わず、輪郭保持リサイズと軽いシャープ処理でロゴ/アイコンを拡大します。元にない模様を作らないことを優先します。", "Crisp Graphics bypasses photo-oriented AI and enlarges logos/icons with edge-preserving resize plus light sharpening, prioritizing source geometry over invented detail.")
       : operation === "crop" && customTargetBytes != null
@@ -2374,6 +2433,11 @@ export default function App() {
                     <span className={`runtime-state ${objectRuntime?.installed ? "ready" : "missing"}`}>{objectRuntime?.installed ? tr("導入済み", "Installed") : tr("未導入", "Not installed")}</span>
                     <button type="button" disabled={Boolean(runtimeInstallActivity)} onClick={() => void installObjectRuntime()}>{objectRuntime?.installed ? tr("修復", "Repair") : tr("導入", "Install")}</button>
                   </div>
+                  <div className="runtime-row">
+                    <div><strong>GFPGAN + NAFNet</strong><small>{restorationRuntime?.installed ? `${restorationRuntime.models.join(" · ")} · ${bytes(restorationRuntime.sizeBytes)}` : tr("顔復元・ノイズ除去・ブレ補正", "Face restoration, denoise & deblur")}</small></div>
+                    <span className={`runtime-state ${restorationRuntime?.installed ? "ready" : "missing"}`}>{restorationRuntime?.installed ? tr("導入済み", "Installed") : tr("未導入", "Not installed")}</span>
+                    <button type="button" disabled={Boolean(runtimeInstallActivity)} onClick={() => void installRestorationRuntime()}>{restorationRuntime?.installed ? tr("修復", "Repair") : tr("導入", "Install")}</button>
+                  </div>
                   <p className="runtime-note">{tr("保存先: ~/Library/Application Support/Agent-2D · 導入後の画像処理はローカルで実行されます。", "Stored in ~/Library/Application Support/Agent-2D · image processing runs locally after installation.")}</p>
                 </div>
               </section>
@@ -2544,6 +2608,43 @@ export default function App() {
               <span>{bytes(inputInfo.inputBytes)}</span>
               <span>{inputInfo.format.toUpperCase()} · {inputInfo.bitDepth}bit</span>
             </div>
+          )}
+
+          {operation === "restore" && (
+            <>
+              <div className="section-label">AI RESTORATION</div>
+              <div className={`restore-card ${restorationRuntime?.installed ? "ready" : "missing"}`}>
+                <div className="restore-head">
+                  <div>
+                    <strong>GFPGAN v1.4 + NAFNet</strong>
+                    <span>{tr("顔・ノイズ・ブレを用途別モデルで修復", "Restore faces, noise and blur with dedicated models")}</span>
+                  </div>
+                  <span className="background-runtime-badge">{!restorationRuntimeChecked ? "Checking…" : restorationRuntime?.installed ? "READY" : "NOT INSTALLED"}</span>
+                </div>
+                <div className="restore-mode-grid" role="group" aria-label={tr("修復モード", "Restoration mode")}>
+                  <button type="button" className={restoreMode === "face" ? "active" : ""} onClick={() => setRestoreMode("face")} disabled={running}>
+                    <strong>{tr("顔復元", "Face Restore")}</strong><small>GFPGAN v1.4</small>
+                  </button>
+                  <button type="button" className={restoreMode === "denoise" ? "active" : ""} onClick={() => setRestoreMode("denoise")} disabled={running}>
+                    <strong>{tr("ノイズ除去", "Denoise")}</strong><small>NAFNet · SIDD</small>
+                  </button>
+                  <button type="button" className={restoreMode === "deblur" ? "active" : ""} onClick={() => setRestoreMode("deblur")} disabled={running}>
+                    <strong>{tr("ブレ補正", "Deblur")}</strong><small>NAFNet · GoPro</small>
+                  </button>
+                </div>
+                {restorationRuntime?.installed ? (
+                  <div className="background-runtime-meta">
+                    <span>{restorationRuntime.models.join(" · ")}</span>
+                    <span>{bytes(restorationRuntime.sizeBytes)} · {restorationRuntime.sharedPythonRuntime ? "shared PyTorch runtime" : "managed PyTorch runtime"}</span>
+                  </div>
+                ) : (
+                  <div className="background-runtime-install">
+                    <span>{tr("初回のみ約500MBの学習済みモデルと追加ライブラリを取得します。既存のAgent-2D管理Python/PyTorchがあれば再利用し、なければアプリ自身が準備します。導入後はローカル処理です。", "On first use, Agent-2D downloads about 500 MB of trained models plus supporting libraries. It reuses the managed Python/PyTorch runtime when available, otherwise prepares its own managed runtime. Processing is local after installation.")}</span>
+                    <button type="button" onClick={installRestorationRuntime} disabled={running || installingRestorationRuntime}>{installingRestorationRuntime ? "Installing…" : tr("Restore Runtimeを導入", "Install Restore Runtime")}</button>
+                  </div>
+                )}
+              </div>
+            </>
           )}
 
           {operation === "crop" && (
@@ -2964,7 +3065,7 @@ export default function App() {
                 <strong>{Math.round(progressFraction * 100)}%</strong>
               </div>
               <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.max(4, progressFraction * 100)}%` }} /></div>
-              <div className="job-meta"><span>{etaText || tr("時間を計測中", "Measuring time")}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : operation === "enhance" ? `${scale === 1 ? "SR skip" : `${scale}×`} · ${enhanceCompressionEnabled ? `${selectedFormats.length} format${enhanceTargetBytes ? ` · ≤${bytes(enhanceTargetBytes)}` : ""}` : "PNG"}` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
+              <div className="job-meta"><span>{etaText || tr("時間を計測中", "Measuring time")}</span><span>{operation === "vectorize" ? `${vectorPreset} · ${vectorDetail} · SVG` : operation === "remove-bg" ? `FeyNoBg · ${selectedFormats.filter((item) => item === "png" || item === "webp").length} alpha format` : operation === "object-edit" ? `SAM2 · ${objectAction === "remove-and-fill" ? "LaMa fill" : "alpha edit"}` : operation === "restore" ? `${restoreMode === "face" ? "GFPGAN v1.4" : restoreMode === "denoise" ? "NAFNet SIDD" : "NAFNet GoPro"} · ${selectedFormats.length} format` : operation === "crop" ? `${targetWidth}×${targetHeight}${customTargetBytes ? ` · ≤${bytes(customTargetBytes)}` : ""}` : operation === "enhance" ? `${scale === 1 ? "SR skip" : `${scale}×`} · ${enhanceCompressionEnabled ? `${selectedFormats.length} format${enhanceTargetBytes ? ` · ≤${bytes(enhanceTargetBytes)}` : ""}` : "PNG"}` : operation === "compress" ? `${selectedFormats.length} format` : `${scale}× · ${selectedFormats.length} format`}</span></div>
             </div>
           )}
 
@@ -2972,7 +3073,7 @@ export default function App() {
 
           <div className="action-row">
             <button className="primary" onClick={start} disabled={running || objectMaskLoading || (operation !== "vectorize" && !(operation === "enhance" && !enhanceCompressionEnabled) && selectedFormats.length === 0) || (operation === "remove-bg" && !backgroundRuntime?.installed) || (operation === "object-edit" && (!objectRuntime?.installed || (objectPoints.length === 0 && !objectBox))) || (multiMode ? queue.length === 0 || !outputDirectory : !inputPath || !outputDirectory || !outputName.trim())}>
-              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : operation === "object-edit" ? (objectAction === "remove-and-fill" ? "Remove & Fill" : objectAction === "keep-selected" ? "Keep Selected" : "Make Transparent") : operation === "enhance" && !enhanceCompressionEnabled ? (multiMode ? `Enhance ${queue.length} images · PNG` : "Enhance · PNG") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
+              {running ? "Processing…" : operation === "vectorize" ? (multiMode ? `Vectorize ${queue.length} images · SVG` : "Vectorize to SVG") : operation === "remove-bg" ? (multiMode ? `Remove BG ${queue.length} images` : "Remove Background") : operation === "object-edit" ? (objectAction === "remove-and-fill" ? "Remove & Fill" : objectAction === "keep-selected" ? "Keep Selected" : "Make Transparent") : operation === "restore" ? (multiMode ? `Restore ${queue.length} images` : restoreMode === "face" ? tr("顔を復元", "Restore Faces") : restoreMode === "denoise" ? tr("ノイズを除去", "Denoise Image") : tr("ブレを補正", "Deblur Image")) : operation === "enhance" && !enhanceCompressionEnabled ? (multiMode ? `Enhance ${queue.length} images · PNG` : "Enhance · PNG") : multiMode ? `${modeLabel(operation)} ${queue.length} images · ${selectedFormats.length} formats` : `${modeLabel(operation)} · ${selectedFormats.length} format${selectedFormats.length > 1 ? "s" : ""}`}
             </button>
             {running && <button className="danger" onClick={cancel}>Cancel</button>}
           </div>

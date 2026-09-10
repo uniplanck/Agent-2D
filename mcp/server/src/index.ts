@@ -24,7 +24,7 @@ let objectBridge: ObjectBridge | null = null;
 let objectBridgeQueue: Promise<void> = Promise.resolve();
 
 const server = new Server(
-  { name: "agent-2d", version: "0.1.0" },
+  { name: "agent-2d", version: "0.1.4" },
   { capabilities: { tools: {} } },
 );
 
@@ -147,6 +147,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           targetBytes: { type: "integer", minimum: 1 },
         },
         required: ["inputPath", "outputPath"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "agent2d_restore",
+      description: "Restore faces with GFPGAN v1.4, reduce sensor noise with NAFNet SIDD, or reduce motion blur with NAFNet GoPro.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          inputPath: pathProperty,
+          outputPath: pathProperty,
+          mode: { type: "string", enum: ["face", "denoise", "deblur"] },
+          format: outputFormatProperty,
+        },
+        required: ["inputPath", "outputPath", "mode"],
         additionalProperties: false,
       },
     },
@@ -292,6 +307,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "agent2d_compress":
         result = await runAgent2d(buildCompressArgs(args));
         break;
+      case "agent2d_restore":
+        result = await runAgent2d(buildRestoreArgs(args));
+        break;
       case "agent2d_custom":
         result = await runAgent2d(buildCustomArgs(args));
         break;
@@ -372,6 +390,18 @@ function buildCompressArgs(args: Record<string, unknown>): string[] {
   appendOutputSelection(command, args);
   appendNumber(command, "--target-bytes", args.targetBytes);
   return command;
+}
+
+function buildRestoreArgs(args: Record<string, unknown>): string[] {
+  return [
+    "restore",
+    requiredString(args, "inputPath"),
+    requiredString(args, "outputPath"),
+    "--mode",
+    requiredEnum(args, "mode", ["face", "denoise", "deblur"]),
+    "--format",
+    optionalEnum(args, "format", ["png", "jpeg", "webp", "avif", "jxl", "tiff", "bmp"], "png"),
+  ];
 }
 
 function buildCustomArgs(args: Record<string, unknown>): string[] {

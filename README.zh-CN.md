@@ -26,13 +26,14 @@ Desktop、CLI 与 MCP 共用同一套 Rust 处理核心，因此不同入口不�
 
 目前应用未进行 Apple notarization。如果 macOS 阻止首次启动，请 **Control/右键点击 Agent-2D.app → 打开**；仍被阻止时前往 **系统设置 → 隐私与安全性 → 仍要打开**。不需要 Terminal 命令。
 
-首次使用 Enhance / Cutout / Object Edit 等 AI 功能时，Agent-2D 会自行准备所需的 Real-ESRGAN、FeyNoBg、SAM 2.1 与 Big-LaMa；也可在 **Settings → AI Runtime** 中查看状态或执行 Install / Repair。安装完成后图像处理在本机运行。
+首次使用 Enhance / Restore / Cutout / Object Edit 等 AI 功能时，Agent-2D 会自行准备所需的 Real-ESRGAN、FeyNoBg、SAM 2.1、Big-LaMa、GFPGAN 与 NAFNet；也可在 **Settings → AI Runtime** 中查看状态或执行 Install / Repair。安装完成后图像处理在本机运行。
 
 ## 主要功能
 
 | 功能 | 说明 | 主要引擎 |
 | --- | --- | --- |
 | **Enhance** | 1× / 2× / 4× AI 超分辨率，或面向小型 Logo/图标的 Crisp Graphics 缩放；可在增强后继续压缩 | Real-ESRGAN + NCNN/Vulkan / 本地边缘保持缩放 + 共用 Rust pipeline |
+| **Restore** | 修复退化人脸、降低照片噪点或减少运动模糊，同时保持图像尺寸 | GFPGAN v1.4 / NAFNet SIDD / NAFNet GoPro |
 | **Compress** | 保持尺寸的压缩与格式转换 | Rust pipeline + 本地 codec |
 | **Custom** | 指定输出尺寸、构图、缩放、位置、⅛× / ¼× / ½× / 1× / 2× / 4× 预设与目标文件大小 | 共用 Rust pipeline |
 | **Cutout** | 自动背景移除，或点击/排除点击/框选后的透明化与自然移除 | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |

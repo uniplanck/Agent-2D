@@ -9,14 +9,15 @@ use agent2d_core::{
     Agent2DResult, ApiEnvelope, BackgroundRemovalRequest, CompressRequest, CompressionMode,
     CompressionOptions, CustomRequest, InspectRequest, InspectResult, ObjectBoxPrompt, ObjectEditAction,
     ObjectEditRequest, ObjectPoint, ObjectPointLabel, ObjectSelection, ObjectSelectionRequest,
-    ObjectSelectionResult, OptimizeRequest, OutputFormat, SCHEMA_VERSION, SuperResolutionMode,
-    SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale, VectorizeDetail,
+    ObjectSelectionResult, OptimizeRequest, OutputFormat, RestoreMode, RestoreRequest, SCHEMA_VERSION,
+    SuperResolutionMode, SuperResolutionPreset, UpscaleOptions, UpscaleRequest, UpscaleScale, VectorizeDetail,
     VectorizePreset, VectorizeRequest, inspect_image,
 };
 use agent2d_pipeline::{
-    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, background_runtime_status, custom_image,
-    edit_object, install_background_runtime, install_object_edit_runtime, object_edit_runtime_status,
-    optimize_image, remove_background, segment_object_mask, vectorize_image, warm_object_edit_runtime,
+    BackgroundRuntimeStatus, ObjectEditRuntimeStatus, RestorationRuntimeStatus, background_runtime_status,
+    custom_image, edit_object, install_background_runtime, install_object_edit_runtime,
+    install_restoration_runtime, object_edit_runtime_status, optimize_image, remove_background,
+    restoration_runtime_status, restore_image, segment_object_mask, vectorize_image, warm_object_edit_runtime,
 };
 use agent2d_sr::{
     RuntimeStatus, SrCapabilities, capabilities as sr_capabilities, install_runtime,
@@ -100,6 +101,17 @@ enum Command {
         formats: Vec<OutputFormatArg>,
         #[arg(long)]
         target_bytes: Option<u64>,
+    },
+    #[command(about = "Restore faces, sensor noise, or motion blur with GFPGAN/NAFNet")]
+    Restore {
+        #[arg(value_name = "IMAGE")]
+        input: PathBuf,
+        #[arg(value_name = "OUTPUT")]
+        output: PathBuf,
+        #[arg(long, value_enum, default_value_t = RestoreModeArg::Face)]
+        mode: RestoreModeArg,
+        #[arg(long, value_enum, default_value_t = OutputFormatArg::Png)]
+        format: OutputFormatArg,
     },
     #[command(about = "Crop/position/zoom to an exact target size with one or more output formats")]
     Custom {
@@ -227,8 +239,29 @@ enum Command {
     ObjectRuntimeStatus,
     #[command(about = "Install SAM2.1 Base+ and Big-LaMa while reusing the FeyNoBg Python/PyTorch runtime")]
     ObjectRuntimeInstall,
+    #[command(about = "Report the managed GFPGAN + NAFNet restoration runtime state")]
+    RestoreRuntimeStatus,
+    #[command(about = "Install GFPGAN v1.4 and NAFNet SIDD/GoPro restoration models")]
+    RestoreRuntimeInstall,
     #[command(about = "Run a persistent line-delimited JSON bridge for repeated Object Mask/Edit CLI integrations")]
     ObjectBridge,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RestoreModeArg {
+    Face,
+    Denoise,
+    Deblur,
+}
+
+impl From<RestoreModeArg> for RestoreMode {
+    fn from(value: RestoreModeArg) -> Self {
+        match value {
+            RestoreModeArg::Face => RestoreMode::Face,
+            RestoreModeArg::Denoise => RestoreMode::Denoise,
+            RestoreModeArg::Deblur => RestoreMode::Deblur,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -430,6 +463,7 @@ struct CapabilitiesResult {
     super_resolution: SrCapabilities,
     background_removal: BackgroundRuntimeStatus,
     object_edit: ObjectEditRuntimeStatus,
+    restoration: RestorationRuntimeStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -587,6 +621,18 @@ fn main() -> ExitCode {
             }
             success_outputs(results, cli.pretty)
         }
+        Command::Restore { input, output, mode, format } => {
+            let request = RestoreRequest {
+                input_path: input,
+                output_path: output,
+                mode: mode.into(),
+                format: format.into(),
+            };
+            match restore_image(&request) {
+                Ok(result) => success(&result, cli.pretty),
+                Err(error) => failure::<Agent2DResult>(error.payload(), cli.pretty),
+            }
+        }
         Command::Custom {
             input,
             output,
@@ -741,8 +787,8 @@ fn main() -> ExitCode {
             }
             success_outputs(results, cli.pretty)
         }
-        Command::Capabilities => match (sr_capabilities(), background_runtime_status(), object_edit_runtime_status()) {
-            (Ok(super_resolution), Ok(background_removal), Ok(object_edit)) => success(
+        Command::Capabilities => match (sr_capabilities(), background_runtime_status(), object_edit_runtime_status(), restoration_runtime_status()) {
+            (Ok(super_resolution), Ok(background_removal), Ok(object_edit), Ok(restoration)) => success(
                 &CapabilitiesResult {
                     schema_version: SCHEMA_VERSION,
                     compression: CompressionCapabilities {
@@ -757,10 +803,11 @@ fn main() -> ExitCode {
                     super_resolution,
                     background_removal,
                     object_edit,
+                    restoration,
                 },
                 cli.pretty,
             ),
-            (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
+            (Err(error), _, _, _) | (_, Err(error), _, _) | (_, _, Err(error), _) | (_, _, _, Err(error)) => failure::<CapabilitiesResult>(error.payload(), cli.pretty),
         },
         Command::RuntimeStatus => match runtime_status() {
             Ok(status) => success(&status, cli.pretty),
@@ -785,6 +832,14 @@ fn main() -> ExitCode {
         Command::ObjectRuntimeInstall => match install_object_edit_runtime() {
             Ok(status) => success(&status, cli.pretty),
             Err(error) => failure::<ObjectEditRuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::RestoreRuntimeStatus => match restoration_runtime_status() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<RestorationRuntimeStatus>(error.payload(), cli.pretty),
+        },
+        Command::RestoreRuntimeInstall => match install_restoration_runtime() {
+            Ok(status) => success(&status, cli.pretty),
+            Err(error) => failure::<RestorationRuntimeStatus>(error.payload(), cli.pretty),
         },
         Command::ObjectBridge => object_bridge(),
     }

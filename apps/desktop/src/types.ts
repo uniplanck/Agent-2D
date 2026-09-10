@@ -1,4 +1,4 @@
-export type Operation = "enhance" | "compress" | "optimize" | "crop" | "resize" | "vectorize" | "remove-bg" | "object-edit";
+export type Operation = "enhance" | "restore" | "compress" | "optimize" | "crop" | "resize" | "vectorize" | "remove-bg" | "object-edit";
 export type JobState = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type SrMode = "fidelity" | "balanced" | "perceptual";
 export type CompressionMode = "exact" | "preserve" | "compact";
@@ -42,6 +42,7 @@ export interface Agent2DResult {
 
 export type ObjectPointLabel = "include" | "exclude";
 export type ObjectEditAction = "keep-selected" | "make-selected-transparent" | "remove-and-fill";
+export type RestoreMode = "face" | "denoise" | "deblur";
 
 export interface ObjectPoint {
   x: number;
@@ -97,6 +98,22 @@ export interface ObjectEditRuntimeStatus {
   sharedPythonRuntime: boolean;
 }
 
+export interface RestorationRuntimeStatus {
+  installed: boolean;
+  managed: boolean;
+  releaseId: string;
+  root: string;
+  pythonPath: string;
+  runnerPath: string;
+  sitePackagesPath: string;
+  gfpganModelPath: string;
+  nafnetDenoiseModelPath: string;
+  nafnetDeblurModelPath: string;
+  models: string[];
+  sharedPythonRuntime: boolean;
+  sizeBytes: number;
+}
+
 export interface DesktopJobRequest {
   operation: Operation;
   inputPath: string;
@@ -119,6 +136,7 @@ export interface DesktopJobRequest {
   vectorThreshold?: number | null;
   objectAction?: ObjectEditAction | null;
   objectSelection?: ObjectSelection | null;
+  restoreMode?: RestoreMode | null;
 }
 
 export interface DesktopJobStatus {

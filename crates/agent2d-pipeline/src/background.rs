@@ -405,9 +405,20 @@ fn runtime_paths(root: PathBuf) -> BackgroundRuntimePaths {
     }
 }
 
+fn managed_python_is_self_contained(paths: &BackgroundRuntimePaths) -> bool {
+    let Ok(root) = fs::canonicalize(&paths.root) else {
+        return false;
+    };
+    let Ok(python) = fs::canonicalize(&paths.python) else {
+        return false;
+    };
+    python.starts_with(root)
+}
+
 fn status_from_paths(paths: &BackgroundRuntimePaths, managed: bool) -> BackgroundRuntimeStatus {
     BackgroundRuntimeStatus {
         installed: paths.python.is_file()
+            && (!managed || managed_python_is_self_contained(paths))
             && paths.runner.is_file()
             && paths.model_cache_dir.is_dir()
             && paths.root.join(READY_NAME).is_file(),
@@ -439,7 +450,7 @@ fn managed_background_runtime_root() -> Result<PathBuf, Agent2DError> {
         .join(BACKGROUND_RUNTIME_RELEASE_ID))
 }
 
-fn install_portable_python(staging: &Path) -> Result<(), Agent2DError> {
+pub(crate) fn install_portable_python(staging: &Path) -> Result<(), Agent2DError> {
     if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
         return Err(install_error("the managed portable Python runtime currently supports Apple Silicon macOS"));
     }

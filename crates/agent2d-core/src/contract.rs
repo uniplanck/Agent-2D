@@ -280,6 +280,23 @@ pub struct ObjectEditRequest {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+pub enum RestoreMode {
+    Face,
+    Denoise,
+    Deblur,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreRequest {
+    pub input_path: PathBuf,
+    pub output_path: PathBuf,
+    pub mode: RestoreMode,
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum VectorizePreset {
     Illustration,
     Logo,

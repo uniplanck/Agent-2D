@@ -30,7 +30,7 @@
 1. Download **[Agent-2D-macOS-arm64.zip](https://github.com/uniplanck/Agent-2D/releases/latest/download/Agent-2D-macOS-arm64.zip)** from GitHub Releases.
 2. Unzip it.
 3. Double-click **Agent-2D.app**. Moving it to `/Applications` is optional.
-4. When an AI feature needs Real-ESRGAN, FeyNoBg, SAM 2.1, or Big-LaMa for the first time, Agent-2D prepares the managed runtime from the GUI and then runs image processing locally.
+4. When an AI feature needs Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa, GFPGAN, or NAFNet for the first time, Agent-2D prepares the managed runtime from the GUI and then runs image processing locally.
 
 This project currently uses ad-hoc macOS signing and is not notarized. If macOS blocks the first launch, **Control-click / right-click Agent-2D.app → Open**. If macOS still blocks it, use **System Settings → Privacy & Security → Open Anyway**. No Terminal command is required.
 
@@ -54,7 +54,7 @@ General users should use the Release ZIP above instead.
 
 ## English
 
-Agent-2D is a local-first 2D image processing engine for macOS Apple Silicon. It combines super resolution, compression and format conversion, custom framing, AI background removal, interactive object editing, and raster-to-SVG vectorization in one application.
+Agent-2D is a local-first 2D image processing engine for macOS Apple Silicon. It combines super resolution, AI face/noise/blur restoration, compression and format conversion, custom framing, AI background removal, interactive object editing, and raster-to-SVG vectorization in one application.
 
 The same Rust processing core powers the Desktop app, CLI, and MCP server. Image processing does not silently move to a cloud service.
 
@@ -65,6 +65,7 @@ The same Rust processing core powers the Desktop app, CLI, and MCP server. Image
 | Capability | What it does | Main engine |
 | --- | --- | --- |
 | **Enhance** | 1× / 2× / 4× AI super resolution or deterministic **Crisp Graphics** scaling for tiny logos/icons, with optional compression after enhancement | Real-ESRGAN + NCNN/Vulkan / local edge-preserving scaler + shared Rust compression pipeline |
+| **Restore** | Restore degraded faces, reduce sensor noise, or reduce motion blur while preserving image dimensions | GFPGAN v1.4 / NAFNet SIDD / NAFNet GoPro |
 | **Compress** | Compress or convert while preserving dimensions | Rust image pipeline + local codecs |
 | **Custom** | Exact output size, framing, zoom, position, ⅛× / ¼× / ½× / 1× / 2× / 4× source-relative presets, Custom scale, and optional target file size | Shared Rust pipeline |
 | **Cutout** | Two sidebar modes: automatic background removal or click/box object editing and erase-and-fill | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
@@ -237,6 +238,7 @@ agent2d_inspect
 agent2d_compress
 agent2d_upscale
 agent2d_enhance
+agent2d_restore
 agent2d_custom
 agent2d_remove_background
 agent2d_object_select
@@ -248,7 +250,7 @@ agent2d_capabilities
 
 ### Local-first boundary
 
-Agent-2D does not bundle the large Real-ESRGAN, FeyNoBg, SAM 2.1, or Big-LaMa model assets in the Git repository or general-user ZIP. The Desktop prepares a missing managed runtime on first use (or through Settings → AI Runtime), then normal processing stays on the local machine.
+Agent-2D does not bundle the large Real-ESRGAN, FeyNoBg, SAM 2.1, Big-LaMa, GFPGAN, or NAFNet model assets in the Git repository or general-user ZIP. The Desktop prepares a missing managed runtime on first use (or through Settings → AI Runtime), then normal processing stays on the local machine.
 
 ### Validation
 
@@ -262,6 +264,7 @@ The current project validation includes:
 - path-based SVG verification
 - FeyNoBg transparent-output verification when its runtime is installed
 - SAM 2.1 selection, transparent Object Edit, and Big-LaMa erase-and-fill E2E when the runtime is installed
+- GFPGAN face restoration and NAFNet denoise/deblur runtime checks when the restoration runtime is installed
 - MCP stdio acceptance tests
 
 ### Contributing
@@ -284,7 +287,7 @@ Third-party libraries, local codec executables, runtime binaries, and AI model w
 
 画像処理の機能を増やしていくと、超解像はこのアプリ、圧縮は別ツール、背景透過はWebサービス、物体削除はさらに別のAI、と処理が分散しがちです。Agent-2Dは、その分散をローカルの一つの処理基盤へ戻すためのmacOS向け2D画像エンジンです。
 
-超解像、圧縮・形式変換、サイズと構図の調整、AI背景透過、クリックによる物体編集、SVGベクター化までを一つのアプリにまとめています。Desktop、CLI、MCPは見た目こそ違いますが、内部では同じRustコアを共有します。Desktopだけ別処理、MCPだけ別品質、という分岐を作らない構成です。
+超解像、顔復元・ノイズ除去・ブレ補正、圧縮・形式変換、サイズと構図の調整、AI背景透過、クリックによる物体編集、SVGベクター化までを一つのアプリにまとめています。Desktop、CLI、MCPは見た目こそ違いますが、内部では同じRustコアを共有します。Desktopだけ別処理、MCPだけ別品質、という分岐を作らない構成です。
 
 ![Agent-2D Desktop — 日本語](docs/assets/screenshots/agent2d-ja.png)
 
@@ -294,13 +297,14 @@ Apple Silicon Macでは、GitHub Releasesの **[Agent-2D-macOS-arm64.zip](https:
 
 現在はnotarizationを行っていないため、初回起動をmacOSに止められた場合は **Agent-2D.appをControlクリック（右クリック）→「開く」**、それでも止まる場合は **システム設定 → プライバシーとセキュリティ →「このまま開く」** を使います。Terminal操作は不要です。
 
-AI機能を初めて使うと、必要なReal-ESRGAN / FeyNoBg / SAM 2.1 / Big-LaMaをAgent-2D自身が準備します。設定の **AI Runtime** から状態確認・Install / Repairもできます。導入後の画像処理はローカルです。
+AI機能を初めて使うと、必要なReal-ESRGAN / FeyNoBg / SAM 2.1 / Big-LaMa / GFPGAN / NAFNetをAgent-2D自身が準備します。設定の **AI Runtime** から状態確認・Install / Repairもできます。導入後の画像処理はローカルです。
 
 ### できること
 
 | 機能 | 内容 | 主なエンジン |
 | --- | --- | --- |
 | **Enhance** | 1× / 2× / 4×のAI超解像、または極小ロゴ/アイコン向けの**Crisp Graphics**拡大。必要なら超解像後の圧縮も同時実行 | Real-ESRGAN + NCNN/Vulkan / ローカル輪郭保持scaler + 共通Rust圧縮pipeline |
+| **Restore** | 劣化した顔の復元、写真ノイズ除去、モーションブラー/軽い手ブレ補正。画像サイズは維持 | GFPGAN v1.4 / NAFNet SIDD / NAFNet GoPro |
 | **Compress** | 解像度を維持した圧縮・形式変換 | Rust画像処理 + ローカルcodec |
 | **Custom** | 指定サイズ、構図、Zoom、位置、⅛× / ¼× / ½× / 1× / 2× / 4×の倍率Preset、Custom倍率、最大ファイル容量 | 共通Rust pipeline |
 | **Cutout** | サイドバーの2モードから、自動背景透過またはクリック/Box選択・透明化・自然削除を選ぶ | FeyNoBg / SAM 2.1 Base+ + Big-LaMa |
@@ -336,7 +340,7 @@ Sourceからbuildする開発者だけ、少なくとも次を用意してくだ
 - Node.js **20以上**
 - Xcode Command Line Tools
 
-PNG / JPEG / WebP / AVIF / TIFF / BMPの主要出力は、Release版でHomebrewなどの手動導入を要求しません。AVIF encodeもRust内蔵です。JPEG XLなど一部のoptional経路は対応codecがない環境では安全に非表示になります。Real-ESRGAN、FeyNoBg、SAM 2.1、Big-LaMaはアプリが必要時に管理runtimeとして準備します。
+PNG / JPEG / WebP / AVIF / TIFF / BMPの主要出力は、Release版でHomebrewなどの手動導入を要求しません。AVIF encodeもRust内蔵です。JPEG XLなど一部のoptional経路は対応codecがない環境では安全に非表示になります。Real-ESRGAN、FeyNoBg、SAM 2.1、Big-LaMa、GFPGAN、NAFNetはアプリが必要時に管理runtimeとして準備します。
 
 ### ソースからDesktopをbuildする
 
