@@ -99,6 +99,9 @@ Agent-2D's `Restore → Face` operation uses TencentARC GFPGAN v1.4. The checkpo
 - Checkpoint source: https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth
 - Pinned checkpoint SHA-256: `e2cd4703ab14f4d01fd1383a8a8b266f9a5833dacee8e6a79d3bf21a1b6be5ad`
 - Python package: `gfpgan` `1.3.8`, with BasicSR / FaceXLib and their transitive dependencies installed into the Agent-2D-managed runtime.
+- FaceXLib: `xinntao/facexlib`, Apache-2.0. GFPGAN also requires the upstream face-detection and face-parsing checkpoints; Agent-2D downloads both into the managed runtime and verifies them before marking the runtime ready.
+- Face detection checkpoint: `detection_Resnet50_Final.pth` from the FaceXLib v0.1.0 release, SHA-256 `6d1de9c2944f2ccddca5f5e010ea5ae64a39845a86311af6fdf30841b0a5a16d`.
+- Face parsing checkpoint: `parsing_parsenet.pth` from the FaceXLib v0.2.2 release, SHA-256 `3d558d8d0e42c20224f13cf5a29c79eba2d59913419f945545d8cf7b72920de2`.
 
 The current integration keeps output dimensions unchanged (`upscale=1`) and uses GFPGAN only for detected face restoration. Review the exact model/checkpoint terms again before any future release that embeds the weights directly instead of downloading them on demand.
 
